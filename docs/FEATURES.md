@@ -7,7 +7,7 @@ Legende: ✅ vorhanden · 🟡 teilweise · 🗺️ geplant · ⛔ nicht machbar
 
 | Feature | Status | Notiz |
 | --- | --- | --- |
-| Stem-Trennung (Vocals, Drums, Bass, Rest) | 🗺️ | Audiospuren sind da. Plan: offenes Modell (z. B. Demucs, MIT) per ONNX Runtime Web/nativ |
+| Stem-Trennung (Vocals, Drums, Bass, Rest) | ✅ | „✂“ im Sample-Browser oder „Stems ✂“ im Audio-Clip-Editor. Läuft lokal mit HT-Demucs v4 (MIT) über ONNX Runtime Web, WebGPU oder WebAssembly. Das Modell (~166 MB) wird einmalig geladen und im Browser gespeichert |
 | Ähnliche Samples finden | ✅ | „≈“ im Sample-Browser. Klangfarbe (Spektrum, Bänder, Rauschanteil) und Hüllkurve werden lokal berechnet, sortiert nach Ähnlichkeit. Geplant: Ähnlichkeit zu einem Ausschnitt im Arrangement |
 | Splice-Integration | ⛔ | Proprietärer Dienst ohne offene API. Stattdessen: eigene Sample-Ordner, später offene Quellen (z. B. Freesound-API) |
 | Audiospuren und Sample-Import | ✅ | WAV/MP3/OGG/FLAC importieren, Audio-Clips in Session und Arrangement, Gain, Repitch auf Projekttempo, Start mitten im Clip |

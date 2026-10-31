@@ -4,6 +4,7 @@
 import { rankSimilar } from "../audio/features";
 import { filterSamples, tagCounts, type SampleFilter, type SampleMeta } from "../audio/samples";
 import type { App } from "./app";
+import { openStemDialog } from "./stems";
 import { h } from "./dom";
 
 export const SAMPLE_DRAG_TYPE = "application/x-opendaw-sample";
@@ -226,6 +227,7 @@ export class SampleBrowser {
           },
           "≈",
         ),
+        h("button", { class: "icon", title: "In Stems trennen (Drums, Bass, Gesang, Rest)", onclick: () => void openStemDialog(this.app, { sampleId: s.id }) }, "✂"),
         h("button", { class: `icon fav ${s.favorite ? "on" : ""}`, title: "Favorit", onclick: () => void lib.update(s.id, { favorite: !s.favorite }) }, "★"),
         h(
           "button",
