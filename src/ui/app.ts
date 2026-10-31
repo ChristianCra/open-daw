@@ -704,6 +704,7 @@ export class App {
     const target = e.target as HTMLElement;
     const typing = target.tagName === "INPUT" && (target as HTMLInputElement).type !== "range";
     if (typing || target.tagName === "SELECT" || target.tagName === "TEXTAREA") return;
+    if (this.arrangement.handleKey(e)) return;
     if (e.code === "Space") {
       e.preventDefault();
       this.togglePlay();

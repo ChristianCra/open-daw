@@ -3,6 +3,8 @@
 // schedules all notes that fall into the next ~100 ms on the audio clock.
 
 import { BEATS_PER_BAR, type Project } from "../model";
+import { automationParam, hasAutomation, pointsBetween, valueAt } from "../automation/automation";
+import type { AutomationParam } from "../model";
 import { getTuning } from "../music/tuning";
 import { DriveUnit } from "./drive";
 import { DrumKit, PolySynth, type Instrument, type Voice } from "./instruments";
@@ -50,6 +52,9 @@ export class AudioEngine {
   followArrangement: boolean[] = [];
   /** Timeline beat (on the bar grid) where playback starts */
   playStart = 0;
+  /** Automated cutoff for the note currently being started (null = use the track value) */
+  private cutoffOverride: (number | null)[] = [];
+
   /** Called when a track switches session clip (scene) or stops; `linearBeat` is when it happens. */
   onSessionSwitch: ((track: number, scene: number | null, linearBeat: number) => void) | null = null;
 
@@ -117,7 +122,11 @@ export class AudioEngine {
       : new PolySynth(
           this.ctx,
           out,
-          () => this.project.tracks[i].synth,
+          () => {
+            const synth = this.project.tracks[i].synth;
+            const cutoff = this.cutoffOverride[i];
+            return cutoff == null ? synth : { ...synth, cutoff };
+          },
           (pitch) => getTuning(this.project.tuning.system).toFreq(pitch, this.project.key),
         );
   }
@@ -141,18 +150,55 @@ export class AudioEngine {
   /** Pushes volume/pan/mute/solo/send values from the project into the graph. */
   syncMixer() {
     const t = this.ctx.currentTime;
-    const anySolo = this.project.tracks.some((tr) => tr.solo);
     this.project.tracks.forEach((tr, i) => {
       const ch = this.channels[i];
       if (!ch) return;
-      const audible = !tr.mute && (!anySolo || tr.solo);
-      ch.volume.gain.setTargetAtTime(audible ? tr.volume : 0, t, 0.01);
-      ch.pan.pan.setTargetAtTime(tr.pan, t, 0.01);
-      ch.delaySend.gain.setTargetAtTime(tr.fx.delay, t, 0.01);
-      ch.drive.update(tr.fx.drive, t);
+      const auto = (id: AutomationParam) => this.automationActive(i) && hasAutomation(tr, id);
+      if (!auto("volume")) ch.volume.gain.setTargetAtTime(this.audible(i) ? tr.volume : 0, t, 0.01);
+      if (!auto("pan")) ch.pan.pan.setTargetAtTime(tr.pan, t, 0.01);
+      if (!auto("delay")) ch.delaySend.gain.setTargetAtTime(tr.fx.delay, t, 0.01);
+      ch.drive.update(tr.fx.drive, t, auto("driveMix"));
     });
     this.master.gain.setTargetAtTime(this.project.masterVolume, t, 0.01);
     this.delayNode.delayTime.setTargetAtTime((60 / this.project.bpm) * 0.75, t, 0.05);
+  }
+
+  private audible(i: number): boolean {
+    const tracks = this.project.tracks;
+    const anySolo = tracks.some((tr) => tr.solo);
+    return !tracks[i].mute && (!anySolo || tracks[i].solo);
+  }
+
+  /** Automation runs while the transport plays the arrangement on that track. */
+  private automationActive(i: number): boolean {
+    return this.playing && this.followArrangement[i] !== false && !this.playStates[i]?.playing;
+  }
+
+  /** Writes automation ramps for one timeline segment into the audio graph. */
+  private scheduleAutomation(i: number, tlFrom: number, tlTo: number, t0: number, t1: number) {
+    const tr = this.project.tracks[i];
+    const ch = this.channels[i];
+    if (!ch) return;
+    const beatToSec = (tl: number) => t0 + ((tl - tlFrom) / (tlTo - tlFrom || 1)) * (t1 - t0);
+    for (const id of ["volume", "pan", "delay", "driveMix"] as const) {
+      const points = tr.automation[id];
+      if (!points?.length) continue;
+      const def = automationParam(id);
+      const real = (tl: number) => {
+        const v = def.fromNorm(valueAt(points, tl) ?? 0);
+        return id === "volume" && !this.audible(i) ? 0 : v;
+      };
+      if (id === "driveMix") {
+        if (!tr.fx.drive.enabled) continue;
+        ch.drive.rampMix(real(tlFrom), real(tlTo), t0, t1);
+        continue;
+      }
+      const param = id === "volume" ? ch.volume.gain : id === "pan" ? ch.pan.pan : ch.delaySend.gain;
+      param.cancelScheduledValues(t0);
+      param.setValueAtTime(real(tlFrom), t0);
+      for (const p of pointsBetween(points, tlFrom, tlTo)) param.linearRampToValueAtTime(real(p.beat), beatToSec(p.beat));
+      param.linearRampToValueAtTime(real(tlTo), t1);
+    }
   }
 
   get secondsPerBeat() {
@@ -236,6 +282,11 @@ export class AudioEngine {
       st.playing = null;
       st.queued = null;
     }
+    // Return automated parameters to their fader values.
+    for (const ch of this.channels) {
+      for (const param of [ch.volume.gain, ch.pan.pan, ch.delaySend.gain]) param.cancelScheduledValues(this.ctx.currentTime);
+    }
+    this.syncMixer();
   }
 
   /** Launch point for a new clip: next bar after what's already scheduled. */
@@ -314,7 +365,7 @@ export class AudioEngine {
     const horizon = this.currentBeat + LOOKAHEAD_SECONDS / this.secondsPerBeat;
     if (horizon <= this.scheduledUntil) return;
     const from = this.scheduledUntil;
-    const notes: ScheduledNote[] = [];
+    const notes: (ScheduledNote & { tlBeat?: number })[] = [];
     this.project.tracks.forEach((tr, i) => {
       const st = this.playStates[i];
       if (this.followArrangement[i] && !st.playing && !st.queued) return;
@@ -331,10 +382,13 @@ export class AudioEngine {
       const tlTo = seg.tlFrom + (seg.linTo - seg.linFrom);
       this.project.tracks.forEach((tr, i) => {
         if (!this.followArrangement[i] || this.playStates[i].playing) return;
+        const t0 = Math.max(this.ctx.currentTime, this.beatToTime(seg.linFrom));
+        const t1 = Math.max(t0 + 0.001, this.beatToTime(seg.linTo));
+        this.scheduleAutomation(i, seg.tlFrom, tlTo, t0, t1);
         for (const n of arrangementNotesInWindow(i, tr.arrangement, seg.tlFrom, tlTo)) {
           const linBeat = seg.linFrom + (n.beat - seg.tlFrom);
           const length = seg.wraps ? Math.min(n.length, seg.linTo - linBeat) : n.length;
-          notes.push({ ...n, beat: linBeat, length });
+          notes.push({ ...n, beat: linBeat, length, tlBeat: n.beat });
         }
       });
     }
@@ -342,7 +396,10 @@ export class AudioEngine {
       // Per-note probability is rolled each time the note comes around.
       if (Math.random() >= (n.note.probability ?? 1)) continue;
       const time = Math.max(this.ctx.currentTime, this.beatToTime(n.beat));
+      const cutoff = n.tlBeat !== undefined ? valueAt(this.project.tracks[n.track]?.automation.cutoff, n.tlBeat) : null;
+      this.cutoffOverride[n.track] = cutoff === null ? null : automationParam("cutoff").fromNorm(cutoff);
       this.channels[n.track]?.instrument.play(n.note.pitch, n.note.velocity, time, n.length * this.secondsPerBeat);
+      this.cutoffOverride[n.track] = null;
     }
     this.scheduledUntil = horizon;
   }

@@ -2,13 +2,15 @@
 // dragged in from the session grid, moved, resized, duplicated and deleted.
 // The ruler sets the start position (click) and the loop region (drag).
 
-import { BEATS_PER_BAR, trimOverlaps, type ArrangementClip, type Clip } from "../model";
+import { AUTOMATION_PARAMS, automationParam, hasAutomation, setPoint, valueAt } from "../automation/automation";
+import { BEATS_PER_BAR, trimOverlaps, type ArrangementClip, type AutomationParam, type AutomationPoint, type Clip } from "../model";
 import type { App } from "./app";
 import { h, select } from "./dom";
 
 export const CLIP_DRAG_TYPE = "application/x-opendaw-clip";
 
 const LANE_H = 56;
+const AUTO_H = 72;
 const HEADER_W = 150;
 const ZOOMS = [6, 10, 16, 24, 36];
 
@@ -20,6 +22,11 @@ export class ArrangementView {
   private clipEls = new Map<ArrangementClip, HTMLElement>();
   private backBtn: HTMLButtonElement | null = null;
   private lastWidth = 0;
+  /** Which automation lane is open under each track (by track index) */
+  private autoLanes = new Map<number, AutomationParam>();
+  /** Currently selected automation point, for keyboard editing */
+  private autoClearBtns = new Map<number, HTMLButtonElement>();
+  private selectedPoint: { track: number; param: AutomationParam; point: AutomationPoint; redraw: () => void } | null = null;
 
   constructor(private app: App) {}
 
@@ -117,7 +124,25 @@ export class ArrangementView {
             onclick: () => app.selectArrangementClip(ti, null),
           },
           h("span", { class: "name" }, tr.name),
-          h("span", { class: "hint" }, tr.instrument === "drums" ? "Drums" : "Synth"),
+          h(
+            "div",
+            { class: "row" },
+            h("span", { class: "hint" }, tr.instrument === "drums" ? "Drums" : "Synth"),
+            h(
+              "button",
+              {
+                class: `btn small auto-toggle ${this.autoLanes.has(ti) ? "on" : ""} ${AUTOMATION_PARAMS.some((d) => hasAutomation(tr, d.id)) ? "has" : ""}`,
+                title: "Automationsspur ein-/ausblenden",
+                onclick: (e: Event) => {
+                  e.stopPropagation();
+                  if (this.autoLanes.has(ti)) this.autoLanes.delete(ti);
+                  else this.autoLanes.set(ti, AUTOMATION_PARAMS.find((d) => hasAutomation(tr, d.id))?.id ?? "volume");
+                  this.render(host);
+                },
+              },
+              "A",
+            ),
+          ),
         ),
       );
 
@@ -127,6 +152,7 @@ export class ArrangementView {
         app.createArrangementClip(ti, this.snap(this.beatAt(e, lane), BEATS_PER_BAR, "floor"));
       });
       lane.addEventListener("pointerdown", (e) => {
+        this.selectedPoint = null;
         if (e.target === lane) app.selectArrangementClip(ti, null);
       });
       lane.addEventListener("dragover", (e) => {
@@ -148,6 +174,42 @@ export class ArrangementView {
 
       tr.arrangement.forEach((ac, ai) => lane.append(this.renderClip(ti, ai, ac, tr.color)));
       lanes.append(lane);
+
+      const autoParam = this.autoLanes.get(ti);
+      if (autoParam) {
+        headers.append(
+          h(
+            "div",
+            { class: "arr-auto-head", style: { height: `${AUTO_H}px` } },
+            select(
+              autoParam,
+              AUTOMATION_PARAMS.map((d) => ({ value: d.id, label: `${hasAutomation(tr, d.id) ? "● " : ""}${d.label}` })),
+              (v) => {
+                this.autoLanes.set(ti, v);
+                this.selectedPoint = null;
+                this.render(host);
+              },
+              "Automatisierter Parameter",
+            ),
+            this.registerClearBtn(ti, h(
+              "button",
+              {
+                class: "btn small",
+                title: "Alle Punkte dieses Parameters löschen",
+                disabled: !hasAutomation(tr, autoParam),
+                onclick: () => {
+                  app.checkpoint();
+                  delete tr.automation[autoParam];
+                  this.selectedPoint = null;
+                  app.changed();
+                },
+              },
+              "Löschen",
+            )),
+          ),
+        );
+        lanes.append(this.renderAutomationLane(ti, autoParam, width));
+      }
     });
 
     this.playhead = h("div", { class: "arr-playhead" });
@@ -275,6 +337,7 @@ export class ArrangementView {
     el.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
       e.stopPropagation();
+      this.selectedPoint = null;
       const app = this.app;
       const resizing = (e.target as HTMLElement).classList.contains("resize");
       const originX = e.clientX;
@@ -326,6 +389,183 @@ export class ArrangementView {
       el.addEventListener("pointermove", move);
       el.addEventListener("pointerup", up);
     });
+  }
+
+  private registerClearBtn(ti: number, btn: HTMLButtonElement): HTMLButtonElement {
+    this.autoClearBtns.set(ti, btn);
+    return btn;
+  }
+
+  /** Keyboard editing of the selected automation point. Returns true when the key was handled. */
+  handleKey(e: KeyboardEvent): boolean {
+    const sel = this.selectedPoint;
+    if (!sel || this.app.view !== "arrangement") return false;
+    const track = this.app.project.tracks[sel.track];
+    const points = track?.automation[sel.param];
+    if (!points || !points.includes(sel.point)) {
+      this.selectedPoint = null;
+      return false;
+    }
+    const fine = e.altKey;
+    const coarse = e.shiftKey;
+    let handled = true;
+    switch (e.key) {
+      case "ArrowUp":
+      case "ArrowDown": {
+        const step = coarse ? 0.1 : fine ? 0.001 : 0.01;
+        this.app.checkpoint();
+        sel.point.value = Math.min(1, Math.max(0, sel.point.value + (e.key === "ArrowUp" ? step : -step)));
+        break;
+      }
+      case "ArrowLeft":
+      case "ArrowRight": {
+        const step = coarse ? BEATS_PER_BAR : fine ? 1 / 16 : 0.25;
+        this.app.checkpoint();
+        sel.point.beat = Math.max(0, sel.point.beat + (e.key === "ArrowRight" ? step : -step));
+        points.sort((a, b) => a.beat - b.beat);
+        break;
+      }
+      case "Delete":
+      case "Backspace":
+        this.app.checkpoint();
+        points.splice(points.indexOf(sel.point), 1);
+        if (!points.length) delete track.automation[sel.param];
+        this.selectedPoint = null;
+        break;
+      case "Escape":
+        this.selectedPoint = null;
+        break;
+      default:
+        handled = false;
+    }
+    if (handled) {
+      e.preventDefault();
+      sel.redraw();
+      this.app.changed(false);
+    }
+    return handled;
+  }
+
+  private renderAutomationLane(ti: number, param: AutomationParam, width: number): HTMLElement {
+    const app = this.app;
+    const track = app.project.tracks[ti];
+    const def = automationParam(param);
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("width", String(width));
+    svg.setAttribute("height", String(AUTO_H));
+    svg.classList.add("auto-svg");
+    const readout = h("div", { class: "auto-readout" });
+    const lane = h("div", { class: "arr-auto-lane", style: { height: `${AUTO_H}px`, "--track-color": track.color } });
+    lane.append(svg, readout);
+
+    const pad = 6;
+    const yOf = (v: number) => pad + (1 - v) * (AUTO_H - 2 * pad);
+    const vOf = (y: number) => Math.min(1, Math.max(0, 1 - (y - pad) / (AUTO_H - 2 * pad)));
+    const xOf = (beat: number) => beat * this.ppb;
+
+    const showReadout = (p: AutomationPoint | null) => {
+      if (!p) {
+        readout.style.display = "none";
+        return;
+      }
+      readout.style.display = "block";
+      readout.style.left = `${xOf(p.beat) + 8}px`;
+      readout.style.top = `${Math.max(0, yOf(p.value) - 22)}px`;
+      readout.textContent = `${def.format(def.fromNorm(p.value))} · Takt ${(p.beat / BEATS_PER_BAR + 1).toFixed(2)}`;
+    };
+
+    const redraw = () => {
+      const points = track.automation[param] ?? [];
+      svg.replaceChildren();
+      const line = document.createElementNS(NS, "polyline");
+      if (points.length) {
+        const coords = [`0,${yOf(points[0].value)}`, ...points.map((p) => `${xOf(p.beat)},${yOf(p.value)}`), `${width},${yOf(points[points.length - 1].value)}`];
+        line.setAttribute("points", coords.join(" "));
+      } else {
+        const y = yOf(def.toNorm(def.current(track)));
+        line.setAttribute("points", `0,${y} ${width},${y}`);
+        line.classList.add("idle");
+      }
+      line.classList.add("auto-line");
+      svg.append(line);
+      for (const p of points) {
+        const c = document.createElementNS(NS, "circle");
+        c.setAttribute("cx", String(xOf(p.beat)));
+        c.setAttribute("cy", String(yOf(p.value)));
+        c.setAttribute("r", "4.5");
+        c.classList.add("auto-point");
+        if (this.selectedPoint?.point === p) c.classList.add("selected");
+        (c as unknown as { __point: AutomationPoint }).__point = p;
+        svg.append(c);
+      }
+      showReadout(this.selectedPoint?.track === ti && this.selectedPoint.param === param ? this.selectedPoint.point : null);
+      const clearBtn = this.autoClearBtns.get(ti);
+      if (clearBtn) clearBtn.disabled = points.length === 0;
+    };
+    redraw();
+
+    svg.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      const rect = svg.getBoundingClientRect();
+      const target = e.target as Element & { __point?: AutomationPoint };
+      app.checkpoint();
+      const points = (track.automation[param] ??= []);
+      let point: AutomationPoint;
+      if (target.__point) {
+        point = target.__point;
+      } else {
+        const raw = (e.clientX - rect.left) / this.ppb;
+        const beat = e.altKey ? raw : Math.round(raw * 4) / 4;
+        point = setPoint(points, beat, vOf(e.clientY - rect.top));
+      }
+      this.selectedPoint = { track: ti, param, point, redraw };
+      redraw();
+      svg.setPointerCapture(e.pointerId);
+      const valueOnly = e.shiftKey;
+      const move = (ev: PointerEvent) => {
+        if (!valueOnly) {
+          const raw = Math.max(0, (ev.clientX - rect.left) / this.ppb);
+          point.beat = ev.altKey ? raw : Math.round(raw * 4) / 4;
+          points.sort((a, b) => a.beat - b.beat);
+        }
+        point.value = vOf(ev.clientY - rect.top);
+        redraw();
+      };
+      const up = () => {
+        svg.removeEventListener("pointermove", move);
+        svg.removeEventListener("pointerup", up);
+        // Two points on the same beat: keep the one just edited.
+        for (let i = points.length - 1; i >= 0; i--) {
+          if (points[i] !== point && Math.abs(points[i].beat - point.beat) < 1e-6) points.splice(i, 1);
+        }
+        app.changed(false);
+        redraw();
+      };
+      svg.addEventListener("pointermove", move);
+      svg.addEventListener("pointerup", up);
+    });
+    svg.addEventListener("dblclick", (e) => {
+      const target = e.target as Element & { __point?: AutomationPoint };
+      const points = track.automation[param];
+      if (!target.__point || !points) return;
+      app.checkpoint();
+      points.splice(points.indexOf(target.__point), 1);
+      if (!points.length) delete track.automation[param];
+      this.selectedPoint = null;
+      app.changed(false);
+      redraw();
+    });
+    // Live value while playing.
+    lane.addEventListener("mousemove", (e) => {
+      if (this.selectedPoint) return;
+      const rect = svg.getBoundingClientRect();
+      const beat = (e.clientX - rect.left) / this.ppb;
+      const v = valueAt(track.automation[param], beat);
+      if (v === null) return;
+      lane.title = `${def.label}: ${def.format(def.fromNorm(v))}`;
+    });
+    return lane;
   }
 }
 

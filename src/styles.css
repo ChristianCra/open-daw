@@ -804,3 +804,76 @@ input:not([type]) {
   pointer-events: none;
   line-height: 1.5;
 }
+
+/* ---------------------------------------------------------------- automation */
+
+.auto-toggle {
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 16px;
+}
+.auto-toggle.has {
+  border-color: var(--warn);
+}
+.auto-toggle.on {
+  background: var(--warn);
+  color: #1b1400;
+}
+.arr-track-head .row {
+  justify-content: space-between;
+}
+.arr-auto-head {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 8px 0 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+.arr-auto-head select {
+  width: 100%;
+  font-size: 12px;
+}
+.arr-auto-lane {
+  position: relative;
+  background: rgba(0, 0, 0, 0.25);
+  border-bottom: 1px solid var(--line);
+}
+.auto-svg {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+  touch-action: none;
+}
+.auto-line {
+  fill: none;
+  stroke: var(--track-color);
+  stroke-width: 2;
+}
+.auto-line.idle {
+  stroke-dasharray: 4 4;
+  opacity: 0.5;
+}
+.auto-point {
+  fill: var(--bg);
+  stroke: var(--track-color);
+  stroke-width: 2;
+  cursor: grab;
+}
+.auto-point.selected {
+  fill: var(--track-color);
+  stroke: var(--text);
+}
+.auto-readout {
+  position: absolute;
+  display: none;
+  padding: 1px 6px;
+  font-size: 11px;
+  background: var(--bg3);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 2;
+}
