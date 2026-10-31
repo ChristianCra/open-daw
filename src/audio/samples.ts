@@ -1,6 +1,8 @@
 // Sample library: imported audio files with tags, stored in IndexedDB so they
 // survive reloads. Decoded AudioBuffers are cached in memory.
 
+import { encodeWav } from "./wav";
+
 export interface SampleMeta {
   id: string;
   name: string;
@@ -170,6 +172,29 @@ export class SampleLibrary {
     }
     this.onChange();
     return { imported, failed };
+  }
+
+  /** Adds rendered audio (e.g. a bounce) to the library, stored as 24-bit WAV. */
+  async addRendered(name: string, channels: Float32Array[], sampleRate: number, tags: string[] = []): Promise<SampleMeta> {
+    const frames = channels[0]?.length ?? 0;
+    const buf = this.ctx.createBuffer(channels.length, Math.max(1, frames), sampleRate);
+    channels.forEach((ch, c) => buf.copyToChannel(ch, c));
+    const meta: SampleMeta = {
+      id: crypto.randomUUID(),
+      name,
+      tags: [...new Set(tags)],
+      favorite: false,
+      duration: buf.duration,
+      sampleRate,
+      channels: channels.length,
+      createdAt: Date.now(),
+      peaks: computePeaks(channels),
+    };
+    await this.put({ ...meta, data: encodeWav(channels, sampleRate, "pcm24"), mime: "audio/wav" });
+    this.metas.set(meta.id, meta);
+    this.buffers.set(meta.id, buf);
+    this.onChange();
+    return meta;
   }
 
   async update(id: string, patch: Partial<Pick<SampleMeta, "name" | "tags" | "favorite">>) {

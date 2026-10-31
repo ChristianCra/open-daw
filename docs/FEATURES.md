@@ -67,7 +67,8 @@ Legende: ✅ vorhanden · 🟡 teilweise · 🗺️ geplant · ⛔ nicht machbar
 | Clip-Raster + Mixer + Geräte + Editor gleichzeitig | ✅ | Alles in einem Fenster |
 | Arrangement-Zeitleiste | ✅ | Clips ziehen/verschieben/kürzen, Loop-Bereich, Session-Jam aufnehmen, „Zurück zum Arrangement“ |
 | Automation mit Tastatursteuerung | ✅ | Lautstärke, Pan, Delay-Send, Filter-Cutoff, Drive-Mix. Punkte per Maus oder Pfeiltasten (Shift grob, Alt fein) |
-| Bounce auf neue Spur | 🗺️ | Audiospuren sind da, fehlt noch Offline-Rendering (nächster Schritt) |
+| Bounce auf neue Spur | ✅ | „⤓“ im Spurkopf: rendert die Spur mit Instrument, Effekten und Automation auf eine neue Audiospur, das Original wird stummgeschaltet. Geplant: einzelne Clips und Zeitauswahl bouncen |
+| Audio-Export (WAV) | ✅ | Ganzes Arrangement oder Loop-Bereich, 16/24/32-Bit-Float, 44,1/48/96 kHz, Normalisieren, schneller als Echtzeit. Geplant: Stems (eine Datei pro Spur), MP3/FLAC |
 
 ## Erweiterbarkeit
 

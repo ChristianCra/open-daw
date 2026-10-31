@@ -82,11 +82,13 @@ export class DriveUnit {
     }
   }
 
-  update(p: DriveParams, time: number, skipMix = false) {
+  /** `instant` sets values without smoothing (offline rendering). */
+  update(p: DriveParams, time: number, skipMix = false, instant = false) {
     const mix = p.enabled ? p.mix : 0;
+    const set = (param: AudioParam, v: number) => (instant ? param.setValueAtTime(v, time) : param.setTargetAtTime(v, time, 0.01));
     if (!skipMix) {
-      this.dry.gain.setTargetAtTime(1 - mix, time, 0.01);
-      this.wet.gain.setTargetAtTime(mix, time, 0.01);
+      set(this.dry.gain, 1 - mix);
+      set(this.wet.gain, mix);
     }
     const key = JSON.stringify([p.shape, p.low, p.mid, p.high]);
     if (key === this.last) return;
@@ -94,7 +96,7 @@ export class DriveUnit {
     [p.low, p.mid, p.high].forEach((amount, i) => {
       this.shapers[i].curve = makeDriveCurve(amount, p.shape);
       // Compensate the loudness increase of heavy saturation a little.
-      this.bandGains[i].gain.setTargetAtTime(1 / (1 + amount * 1.5), time, 0.01);
+      set(this.bandGains[i].gain, 1 / (1 + amount * 1.5));
     });
   }
 }

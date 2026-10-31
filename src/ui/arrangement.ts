@@ -30,6 +30,13 @@ export class ArrangementView {
   private lastWidth = 0;
   /** Which automation lane is open under each track (by track index) */
   private autoLanes = new Map<number, AutomationParam>();
+
+  /** Keeps per-track view state in place after a track was inserted at `index`. */
+  trackInserted(index: number) {
+    const shifted = new Map<number, AutomationParam>();
+    for (const [t, param] of this.autoLanes) shifted.set(t >= index ? t + 1 : t, param);
+    this.autoLanes = shifted;
+  }
   /** Currently selected automation point, for keyboard editing */
   private autoClearBtns = new Map<number, HTMLButtonElement>();
   private selectedPoint: { track: number; param: AutomationParam; point: AutomationPoint; redraw: () => void } | null = null;
@@ -124,12 +131,12 @@ export class ArrangementView {
         h(
           "div",
           {
-            class: `arr-track-head ${ti === app.selection.track ? "selected" : ""} ${following ? "" : "overridden"}`,
+            class: `arr-track-head ${ti === app.selection.track ? "selected" : ""} ${following ? "" : "overridden"} ${tr.mute ? "muted" : ""}`,
             style: { height: `${LANE_H}px`, borderLeftColor: tr.color },
             title: following ? "" : "Spielt gerade einen Session-Clip",
             onclick: () => app.selectArrangementClip(ti, null),
           },
-          h("span", { class: "name" }, tr.name),
+          h("span", { class: "name" }, tr.name, tr.mute ? h("small", { class: "hint" }, " stumm") : null),
           h(
             "div",
             { class: "row" },
@@ -148,11 +155,24 @@ export class ArrangementView {
               },
               "A",
             ),
+            h(
+              "button",
+              {
+                class: "btn small bounce-btn",
+                title: "Bounce auf neue Spur: Spur mit Instrument, Effekten und Automation als Audio rendern",
+                disabled: !tr.arrangement.length,
+                onclick: (e: Event) => {
+                  e.stopPropagation();
+                  void app.bounceTrack(ti);
+                },
+              },
+              "⤓",
+            ),
           ),
         ),
       );
 
-      const lane = h("div", { class: "arr-lane", style: { height: `${LANE_H}px` }, "data-track": ti });
+      const lane = h("div", { class: `arr-lane ${tr.mute ? "muted" : ""}`, style: { height: `${LANE_H}px` }, "data-track": ti });
       lane.addEventListener("dblclick", (e) => {
         if (e.target !== lane) return;
         app.createArrangementClip(ti, this.snap(this.beatAt(e, lane), BEATS_PER_BAR, "floor"));
