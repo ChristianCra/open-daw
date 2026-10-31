@@ -1,6 +1,7 @@
 // Sample library: imported audio files with tags, stored in IndexedDB so they
 // survive reloads. Decoded AudioBuffers are cached in memory.
 
+import { extractFeatures, mixdown } from "./features";
 import { encodeWav } from "./wav";
 
 export interface SampleMeta {
@@ -15,6 +16,14 @@ export interface SampleMeta {
   createdAt: number;
   /** Downsampled peak envelope (0..1) for waveform drawing */
   peaks: number[];
+  /** Timbre/envelope features for similarity search (missing for samples imported by older versions) */
+  features?: number[];
+}
+
+/** Features of a decoded buffer. */
+export function bufferFeatures(buf: AudioBuffer): number[] {
+  const channels = Array.from({ length: buf.numberOfChannels }, (_, c) => buf.getChannelData(c));
+  return extractFeatures(mixdown(channels), buf.sampleRate);
 }
 
 interface StoredSample extends SampleMeta {
@@ -161,6 +170,7 @@ export class SampleLibrary {
           channels: buf.numberOfChannels,
           createdAt: Date.now(),
           peaks: computePeaks(channels),
+          features: extractFeatures(mixdown(channels), buf.sampleRate),
         };
         await this.put({ ...meta, data, mime: file.type || "audio/*" });
         this.metas.set(meta.id, meta);
@@ -189,12 +199,29 @@ export class SampleLibrary {
       channels: channels.length,
       createdAt: Date.now(),
       peaks: computePeaks(channels),
+      features: extractFeatures(mixdown(channels), sampleRate),
     };
     await this.put({ ...meta, data: encodeWav(channels, sampleRate, "pcm24"), mime: "audio/wav" });
     this.metas.set(meta.id, meta);
     this.buffers.set(meta.id, buf);
     this.onChange();
     return meta;
+  }
+
+  /** Computes and stores features for samples that don't have them yet. Returns how many were analysed. */
+  async analyzeMissing(): Promise<number> {
+    let count = 0;
+    for (const meta of this.metas.values()) {
+      if (meta.features) continue;
+      const buf = await this.load(meta.id);
+      const stored = await this.getStored(meta.id);
+      if (!buf || !stored) continue;
+      meta.features = bufferFeatures(buf);
+      await this.put({ ...stored, features: meta.features });
+      count++;
+    }
+    if (count) this.onChange();
+    return count;
   }
 
   async update(id: string, patch: Partial<Pick<SampleMeta, "name" | "tags" | "favorite">>) {

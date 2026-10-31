@@ -13,7 +13,8 @@ kein UI-Design anderer DAWs. Mehr dazu in [docs/REVERSE-ENGINEERING.md](docs/REV
 - **Arrangement-Zeitleiste**: Clips aus dem Raster hineinziehen, verschieben, kürzen, duplizieren,
   Loop-Bereich, Session-Jams direkt ins Arrangement aufnehmen
 - **Audiospuren und Sample-Browser**: Audiodateien importieren, mit Tags und Favoriten ordnen,
-  vorhören und als Audio-Clips in Raster oder Zeitleiste ziehen, optional dem Projekttempo folgen
+  vorhören, **ähnlich klingende Samples finden** und als Audio-Clips in Raster oder Zeitleiste ziehen,
+  optional dem Projekttempo folgen
 - **Automation** im Arrangement (Lautstärke, Pan, Delay, Filter-Cutoff, Drive-Mix) mit Maus- und Tastatursteuerung
 - **Piano-Roll** mit Tonart-/Skalen-Hervorhebung, „Fold“, Velocity und Wahrscheinlichkeit pro Note
 - **MIDI Tools**: Generatoren (Melodie, Akkorde, euklidische Rhythmen) und Transformationen
@@ -81,6 +82,7 @@ Installer und hängt sie an einen Release-Entwurf.
 | Punkt fein bewegen | Pfeiltasten (Shift: grob, Alt: fein), Entf löscht |
 | Clip anlegen | Doppelklick auf leeren Slot (bei Audiospuren: Datei wählen) |
 | Sample importieren | „+ Import“ im Sample-Browser oder Dateien auf den Browser ziehen |
+| Ähnliche Samples finden | „≈“ neben einem Sample im Browser |
 | Sample verwenden | Aus dem Browser in einen Slot oder in die Zeitleiste ziehen (leere Spuren werden zur Audiospur) |
 | Sample an Clip-Länge anpassen | „An Clip anpassen“ im Clip-Editor (setzt die Sample-BPM) |
 | Clip starten | ▶ im Clip oder ▶ Szene |
