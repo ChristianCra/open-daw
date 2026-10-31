@@ -23,6 +23,7 @@ kein UI-Design anderer DAWs. Mehr dazu in [docs/REVERSE-ENGINEERING.md](docs/REV
 - **Effekte**: „Drive“ (3-Band-Sättigung), Delay-Send
 - **Mixer** mit Pegelanzeige, Pan, Mute, Solo
 - **MIDI-Keyboards** über Web MIDI: live spielen, aufnehmen, Pitchbend/MPE
+- **Bounce auf neue Spur** (Instrument, Effekte und Automation als Audio) und **WAV-Export** des Arrangements
 - Undo/Redo, Speichern/Öffnen als JSON, Export einzelner Clips als MIDI-Datei
 - Windows-Installer (.exe/.msi) über Tauri, außerdem installierbar als Web-App (PWA)
 
@@ -86,6 +87,8 @@ Installer und hängt sie an einen Release-Entwurf.
 | Note zeichnen | Klicken und nach rechts ziehen |
 | Note löschen | Klick auf die Note |
 | Wahrscheinlichkeit | Shift+Klick auf eine Note (100 → 75 → 50 → 25 %) |
+| Spur bouncen | „⤓“ im Spurkopf der Arrangement-Ansicht |
+| Als WAV exportieren | „Export“ oben rechts |
 | Rückgängig/Wiederholen | Strg+Z / Strg+Shift+Z |
 | MIDI-Keyboard | „🎹 MIDI verbinden“, dann ● für Aufnahme |
 

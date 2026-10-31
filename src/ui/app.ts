@@ -30,6 +30,7 @@ import type { SampleMeta } from "../audio/samples";
 import { ArrangementView, CLIP_DRAG_TYPE, setPeakSource } from "./arrangement";
 import { SAMPLE_DRAG_TYPE, SampleBrowser } from "./browser";
 import { ClipEditor } from "./editor";
+import { bounceTrack, openExportDialog } from "./export";
 import { renderDevicePanel, renderToolsPanel, type ToolState } from "./panels";
 
 const STORAGE_KEY = "open-daw.project.v1";
@@ -202,6 +203,36 @@ export class App {
     void this.engine.samples.load(meta.id);
     this.selection = { track, scene: this.selection.scene, arr: tr.arrangement.indexOf(ac) };
     this.changed();
+  }
+
+  /** Bounces a track's arrangement to audio on a new track below it. */
+  bounceTrack(track: number) {
+    return bounceTrack(this, track).catch((err: Error) => {
+      this.toast(`Bounce fehlgeschlagen: ${err.message}`);
+      return false;
+    });
+  }
+
+  /** Inserts a new audio track holding a bounced sample right below `after` and mutes the source. */
+  insertBouncedTrack(after: number, meta: SampleMeta, start: number) {
+    const src = this.project.tracks[after];
+    this.checkpoint();
+    const tr = createTrack(after + 1, "audio", this.project.sceneCount);
+    tr.name = `${src.name} (Bounce)`;
+    tr.color = src.color;
+    tr.volume = 1;
+    tr.pan = 0;
+    const clip = createAudioClip(meta.name, meta.id, meta.duration, this.project.bpm);
+    // Follow later tempo changes (by repitching), like the MIDI tracks do.
+    clip.audio!.sampleBpm = this.project.bpm;
+    tr.arrangement.push({ start, length: clip.length, clip });
+    this.project.tracks.splice(after + 1, 0, tr);
+    src.mute = true;
+    this.engine.setProject(this.project);
+    this.arrangement.trackInserted(after + 1);
+    this.selection = { track: after + 1, scene: this.selection.scene, arr: 0 };
+    this.changed();
+    this.toast(`„${tr.name}“ angelegt, „${src.name}“ ist stummgeschaltet.`);
   }
 
   /** Audio can only go on audio tracks; an empty track is converted automatically. */
@@ -451,6 +482,7 @@ export class App {
         h("button", { class: "btn", onclick: () => confirmNew(this) }, "Neu"),
         h("button", { class: `btn ${this.showBrowser ? "on" : ""}`, title: "Sample-Browser ein-/ausblenden", onclick: () => ((this.showBrowser = !this.showBrowser), this.renderAll()) }, "Samples"),
         h("button", { class: "btn", onclick: () => fileInput.click() }, "Öffnen"),
+        h("button", { class: "btn", title: "Arrangement als WAV-Datei exportieren", onclick: () => openExportDialog(this) }, "Export"),
         h("button", { class: "btn", onclick: () => download(`${p.name || "project"}.opendaw.json`, serializeProject(p), "application/json") }, "Speichern"),
         fileInput,
       ),

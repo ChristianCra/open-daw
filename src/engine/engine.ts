@@ -38,8 +38,15 @@ interface Channel {
   kind: string;
 }
 
+export interface EngineOptions {
+  /** Context to render into; defaults to a realtime AudioContext. */
+  ctx?: BaseAudioContext;
+  /** Share an existing sample library (offline renders reuse the decoded buffers). */
+  samples?: SampleLibrary;
+}
+
 export class AudioEngine {
-  readonly ctx: AudioContext;
+  readonly ctx: BaseAudioContext;
   private master: GainNode;
   private masterMeter: AnalyserNode;
   private delayIn: GainNode;
@@ -64,9 +71,12 @@ export class AudioEngine {
   /** Called when a track switches session clip (scene) or stops; `linearBeat` is when it happens. */
   onSessionSwitch: ((track: number, scene: number | null, linearBeat: number) => void) | null = null;
 
-  constructor(public project: Project) {
-    this.ctx = new AudioContext({ latencyHint: "interactive" });
-    this.samples = new SampleLibrary(this.ctx);
+  constructor(
+    public project: Project,
+    opts: EngineOptions = {},
+  ) {
+    this.ctx = opts.ctx ?? new AudioContext({ latencyHint: "interactive" });
+    this.samples = opts.samples ?? new SampleLibrary(this.ctx);
     this.master = this.ctx.createGain();
     this.masterMeter = this.ctx.createAnalyser();
     this.masterMeter.fftSize = 512;
@@ -159,17 +169,20 @@ export class AudioEngine {
   /** Pushes volume/pan/mute/solo/send values from the project into the graph. */
   syncMixer() {
     const t = this.ctx.currentTime;
+    // Realtime changes glide to avoid zipper noise; offline renders start at the exact values.
+    const instant = !(this.ctx instanceof AudioContext);
+    const set = (param: AudioParam, v: number, tc = 0.01) => (instant ? param.setValueAtTime(v, t) : param.setTargetAtTime(v, t, tc));
     this.project.tracks.forEach((tr, i) => {
       const ch = this.channels[i];
       if (!ch) return;
       const auto = (id: AutomationParam) => this.automationActive(i) && hasAutomation(tr, id);
-      if (!auto("volume")) ch.volume.gain.setTargetAtTime(this.audible(i) ? tr.volume : 0, t, 0.01);
-      if (!auto("pan")) ch.pan.pan.setTargetAtTime(tr.pan, t, 0.01);
-      if (!auto("delay")) ch.delaySend.gain.setTargetAtTime(tr.fx.delay, t, 0.01);
-      ch.drive.update(tr.fx.drive, t, auto("driveMix"));
+      if (!auto("volume")) set(ch.volume.gain, this.audible(i) ? tr.volume : 0);
+      if (!auto("pan")) set(ch.pan.pan, tr.pan);
+      if (!auto("delay")) set(ch.delaySend.gain, tr.fx.delay);
+      ch.drive.update(tr.fx.drive, t, auto("driveMix"), instant);
     });
-    this.master.gain.setTargetAtTime(this.project.masterVolume, t, 0.01);
-    this.delayNode.delayTime.setTargetAtTime((60 / this.project.bpm) * 0.75, t, 0.05);
+    set(this.master.gain, this.project.masterVolume);
+    set(this.delayNode.delayTime, (60 / this.project.bpm) * 0.75, 0.05);
   }
 
   private audible(i: number): boolean {
@@ -208,6 +221,11 @@ export class AudioEngine {
       for (const p of pointsBetween(points, tlFrom, tlTo)) param.linearRampToValueAtTime(real(p.beat), beatToSec(p.beat));
       param.linearRampToValueAtTime(real(tlTo), t1);
     }
+  }
+
+  /** Resumes a suspended realtime context (no-op for offline contexts). */
+  private resume(): Promise<void> {
+    return this.ctx instanceof AudioContext ? this.ctx.resume() : Promise.resolve();
   }
 
   get secondsPerBeat() {
@@ -270,7 +288,7 @@ export class AudioEngine {
 
   async play() {
     if (this.playing) return;
-    await this.ctx.resume();
+    await this.resume();
     this.playing = true;
     this.anchorBeat = 0;
     this.anchorTime = this.ctx.currentTime + 0.05;
@@ -348,7 +366,7 @@ export class AudioEngine {
 
   /** Live note-on from a MIDI keyboard. */
   liveNoteOn(track: number, pitch: number, velocity: number, channel = 0) {
-    void this.ctx.resume();
+    void this.resume();
     const key = `${channel}:${pitch}`;
     this.liveVoices.get(key)?.voice.release(this.ctx.currentTime);
     const ch = this.channels[track];
@@ -374,14 +392,35 @@ export class AudioEngine {
 
   /** Auditions a single note right now (used by the clip editor). */
   preview(track: number, pitch: number) {
-    void this.ctx.resume();
+    void this.resume();
     this.channels[track]?.instrument.play(pitch, 0.8, this.ctx.currentTime + 0.01, 0.2);
+  }
+
+  /**
+   * Schedules the arrangement from timeline beat `from` to `to` in one go,
+   * starting at context time 0. Used for offline rendering (bounce, export).
+   * The loop region is ignored.
+   */
+  scheduleRange(from: number, to: number) {
+    this.stop();
+    this.project.loop = { ...this.project.loop, enabled: false };
+    this.playStart = from;
+    this.playing = true;
+    this.anchorBeat = 0;
+    this.anchorTime = 0;
+    this.scheduledUntil = 0;
+    this.scheduleWindow(to - from);
   }
 
   private tick() {
     if (!this.playing) return;
     const horizon = this.currentBeat + LOOKAHEAD_SECONDS / this.secondsPerBeat;
     if (horizon <= this.scheduledUntil) return;
+    this.scheduleWindow(horizon);
+  }
+
+  /** Schedules everything between the last scheduled beat and `horizon` (linear transport beats). */
+  private scheduleWindow(horizon: number) {
     const from = this.scheduledUntil;
     const notes: (ScheduledNote & { tlBeat?: number })[] = [];
     this.project.tracks.forEach((tr, i) => {
@@ -481,7 +520,7 @@ export class AudioEngine {
     this.previewSource?.stop();
     this.previewSource = null;
     if (!id) return;
-    void this.ctx.resume();
+    void this.resume();
     void this.samples.load(id).then((buf) => {
       if (!buf) return;
       const src = this.ctx.createBufferSource();
