@@ -12,6 +12,8 @@ kein UI-Design anderer DAWs. Mehr dazu in [docs/REVERSE-ENGINEERING.md](docs/REV
 - **Clip-Raster** mit Szenen, Start quantisiert auf den nächsten Takt, Stop pro Spur
 - **Arrangement-Zeitleiste**: Clips aus dem Raster hineinziehen, verschieben, kürzen, duplizieren,
   Loop-Bereich, Session-Jams direkt ins Arrangement aufnehmen
+- **Audiospuren und Sample-Browser**: Audiodateien importieren, mit Tags und Favoriten ordnen,
+  vorhören und als Audio-Clips in Raster oder Zeitleiste ziehen, optional dem Projekttempo folgen
 - **Automation** im Arrangement (Lautstärke, Pan, Delay, Filter-Cutoff, Drive-Mix) mit Maus- und Tastatursteuerung
 - **Piano-Roll** mit Tonart-/Skalen-Hervorhebung, „Fold“, Velocity und Wahrscheinlichkeit pro Note
 - **MIDI Tools**: Generatoren (Melodie, Akkorde, euklidische Rhythmen) und Transformationen
@@ -76,7 +78,10 @@ Installer und hängt sie an einen Release-Entwurf.
 | Automationsspur zeigen | „A“ im Spurkopf der Arrangement-Ansicht |
 | Automationspunkt setzen / löschen | Klick in die Spur / Doppelklick auf den Punkt |
 | Punkt fein bewegen | Pfeiltasten (Shift: grob, Alt: fein), Entf löscht |
-| Clip anlegen | Doppelklick auf leeren Slot |
+| Clip anlegen | Doppelklick auf leeren Slot (bei Audiospuren: Datei wählen) |
+| Sample importieren | „+ Import“ im Sample-Browser oder Dateien auf den Browser ziehen |
+| Sample verwenden | Aus dem Browser in einen Slot oder in die Zeitleiste ziehen (leere Spuren werden zur Audiospur) |
+| Sample an Clip-Länge anpassen | „An Clip anpassen“ im Clip-Editor (setzt die Sample-BPM) |
 | Clip starten | ▶ im Clip oder ▶ Szene |
 | Note zeichnen | Klicken und nach rechts ziehen |
 | Note löschen | Klick auf die Note |
@@ -90,6 +95,7 @@ Installer und hängt sie an einen Release-Entwurf.
 src/
   model.ts             Projekt-Datenmodell (reines JSON)
   engine/              Audio-Engine, Scheduler, Instrumente, Drive, MIDI-Eingang
+  audio/               Sample-Bibliothek (IndexedDB), Wellenform-Peaks, Tag-Filter
   music/               Skalen und Stimmungssysteme
   midi/                MIDI Tools (Generatoren/Transformationen), MIDI-Datei-Export
   ui/                  Oberfläche (ohne Framework)

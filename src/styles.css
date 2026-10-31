@@ -584,12 +584,20 @@ input:not([type]) {
   min-height: 0;
   min-width: 0;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  gap: 8px;
 }
-.main-view > [hidden] {
+.main-view [hidden] {
   display: none !important;
 }
-.main-view > .session {
+.views {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.views > .session {
   flex: 1;
 }
 .tabs .tab.on {
@@ -876,4 +884,194 @@ input:not([type]) {
   pointer-events: none;
   white-space: nowrap;
   z-index: 2;
+}
+
+/* ---------------------------------------------------------------- sample browser */
+
+.browser {
+  width: 260px;
+  flex: 0 0 260px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.browser.drop {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+.browser-filters {
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+}
+.browser-search,
+.tag-input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 4px 6px;
+  font: inherit;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.chip {
+  background: var(--bg3);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.chip small {
+  color: var(--muted);
+}
+.chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+.chip.on small {
+  color: var(--bg);
+}
+.browser-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.sample {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  cursor: grab;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sample:hover {
+  background: var(--bg3);
+}
+.sample.playing {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg2));
+}
+.sample-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.sample-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sample-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  min-width: 0;
+}
+.tag {
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 5px;
+}
+.mini-wave {
+  width: 120px;
+  height: 22px;
+  flex: 0 0 auto;
+}
+.icon {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  padding: 0 3px;
+  line-height: 1.4;
+}
+.icon:hover {
+  color: var(--text);
+}
+.icon.fav.on {
+  color: var(--warn);
+}
+.icon.danger:hover {
+  color: var(--danger);
+}
+.pad {
+  padding: 8px;
+}
+.btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.slot.drop {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+/* ---------------------------------------------------------------- audio clip editor */
+
+.audio-editor {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+.audio-wave-wrap {
+  position: relative;
+  height: 140px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.audio-wave-wrap canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.audio-wave-wrap .playhead {
+  position: absolute;
+  top: 0;
+  height: 100%;
+}
+.audio-info {
+  margin-top: 6px;
+  color: var(--muted);
+}
+.num-input {
+  width: 64px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 2px 4px;
+  font: inherit;
+}
+.audio-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.audio-beat {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid color-mix(in srgb, var(--line) 50%, transparent);
+}
+.audio-beat.bar {
+  border-left-color: var(--line);
 }

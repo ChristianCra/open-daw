@@ -5,7 +5,13 @@
 import { AUTOMATION_PARAMS, automationParam, hasAutomation, setPoint, valueAt } from "../automation/automation";
 import { BEATS_PER_BAR, trimOverlaps, type ArrangementClip, type AutomationParam, type AutomationPoint, type Clip } from "../model";
 import type { App } from "./app";
+import { SAMPLE_DRAG_TYPE } from "./browser";
 import { h, select } from "./dom";
+
+function isSampleDrag(e: DragEvent): boolean {
+  const types = e.dataTransfer?.types ?? [];
+  return types.includes(SAMPLE_DRAG_TYPE) || types.includes("Files");
+}
 
 export const CLIP_DRAG_TYPE = "application/x-opendaw-clip";
 
@@ -127,7 +133,7 @@ export class ArrangementView {
           h(
             "div",
             { class: "row" },
-            h("span", { class: "hint" }, tr.instrument === "drums" ? "Drums" : "Synth"),
+            h("span", { class: "hint" }, ({ synth: "Synth", drums: "Drums", audio: "Audio" } as const)[tr.instrument]),
             h(
               "button",
               {
@@ -156,15 +162,22 @@ export class ArrangementView {
         if (e.target === lane) app.selectArrangementClip(ti, null);
       });
       lane.addEventListener("dragover", (e) => {
-        if (e.dataTransfer?.types.includes(CLIP_DRAG_TYPE)) {
+        if (e.dataTransfer?.types.includes(CLIP_DRAG_TYPE) || isSampleDrag(e)) {
           e.preventDefault();
-          e.dataTransfer.dropEffect = "copy";
+          if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
           lane.classList.add("drop");
         }
       });
       lane.addEventListener("dragleave", () => lane.classList.remove("drop"));
-      lane.addEventListener("drop", (e) => {
+      lane.addEventListener("drop", async (e) => {
         lane.classList.remove("drop");
+        if (isSampleDrag(e)) {
+          e.preventDefault();
+          const start = this.snap(this.beatAt(e, lane), 1, "floor");
+          const [meta] = await app.samplesFromDrop(e);
+          if (meta) app.placeSampleOnArrangement(ti, start, meta);
+          return;
+        }
         const raw = e.dataTransfer?.getData(CLIP_DRAG_TYPE);
         if (!raw) return;
         e.preventDefault();
@@ -569,6 +582,33 @@ export class ArrangementView {
   }
 }
 
+let peaksFor: (id: string) => number[] | undefined = () => undefined;
+
+/** Lets the arrangement look up waveform peaks for samples. */
+export function setPeakSource(fn: (id: string) => number[] | undefined) {
+  peaksFor = fn;
+}
+
+/** Waveform preview of an audio clip, repeated for each loop pass. */
+function drawAudioClip(ctx: CanvasRenderingContext2D, ac: ArrangementClip, ppb: number, w: number, hgt: number, color: string, peaks: number[] | undefined) {
+  const clip = ac.clip;
+  ctx.fillStyle = color;
+  if (!peaks?.length || clip.length <= 0) {
+    ctx.globalAlpha = 0.4;
+    ctx.fillRect(0, hgt / 2, w, 1);
+    return;
+  }
+  ctx.globalAlpha = 0.85;
+  const mid = hgt / 2;
+  const offset = ac.offset ?? 0;
+  for (let x = 0; x < w; x++) {
+    const beatInClip = (((x / ppb + offset) % clip.length) + clip.length) % clip.length;
+    const i = Math.floor((beatInClip / clip.length) * peaks.length);
+    const p = (peaks[i] ?? 0) * (mid - 1);
+    ctx.fillRect(x, mid - p, 1, Math.max(1, p * 2));
+  }
+}
+
 /** Mini piano-roll preview inside an arrangement clip. */
 function drawNotes(canvas: HTMLCanvasElement, ac: ArrangementClip, ppb: number, color: string) {
   const w = Math.max(1, Math.round(ac.length * ppb));
@@ -582,6 +622,10 @@ function drawNotes(canvas: HTMLCanvasElement, ac: ArrangementClip, ppb: number, 
   if (!ctx) return;
   ctx.scale(dpr, dpr);
   const clip: Clip = ac.clip;
+  if (clip.audio) {
+    drawAudioClip(ctx, ac, ppb, w, hgt, color, peaksFor(clip.audio.sampleId));
+    return;
+  }
   if (!clip.notes.length || clip.length <= 0) return;
   const pitches = clip.notes.map((n) => n.pitch);
   const lo = Math.min(...pitches);

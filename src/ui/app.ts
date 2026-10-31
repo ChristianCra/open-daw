@@ -9,8 +9,8 @@ import {
   arrangementEnd,
   BEATS_PER_BAR,
   cloneClip,
+  createAudioClip,
   createClip,
-  trimOverlaps,
   createDemoProject,
   createTrack,
   NOTE_NAMES,
@@ -21,11 +21,14 @@ import {
   type InstrumentKind,
   type Note,
   type Project,
+  trimOverlaps,
 } from "../model";
 import { SCALES } from "../music/scales";
 import { TUNINGS } from "../music/tuning";
 import { download, h, select, slider } from "./dom";
-import { ArrangementView, CLIP_DRAG_TYPE } from "./arrangement";
+import type { SampleMeta } from "../audio/samples";
+import { ArrangementView, CLIP_DRAG_TYPE, setPeakSource } from "./arrangement";
+import { SAMPLE_DRAG_TYPE, SampleBrowser } from "./browser";
 import { ClipEditor } from "./editor";
 import { renderDevicePanel, renderToolsPanel, type ToolState } from "./panels";
 
@@ -65,6 +68,9 @@ export class App {
   private topbar = h("header", { class: "topbar" });
   private session = h("section", { class: "session" });
   private arrangementHost = h("section", { class: "arrangement" });
+  private browserHost = h("aside", { class: "panel browser" });
+  browser: SampleBrowser;
+  showBrowser = true;
   private editorHost = h("section", { class: "panel editor-panel" });
   private deviceHost = h("section", { class: "panel device-panel" });
   private toolsHost = h("section", { class: "panel tools-panel" });
@@ -74,10 +80,18 @@ export class App {
     this.engine = new AudioEngine(this.project);
     this.editor = new ClipEditor(this);
     this.arrangement = new ArrangementView(this);
+    this.browser = new SampleBrowser(this);
+    setPeakSource((id) => this.engine.samples.meta(id)?.peaks);
+    this.engine.samples.onChange = () => {
+      this.browser.refresh();
+      if (this.view === "arrangement") this.arrangement.render(this.arrangementHost);
+      this.editor.render(this.editorHost);
+    };
+    void this.engine.samples.init().then(() => this.preloadSamples());
     this.engine.onSessionSwitch = (track, scene, lin) => this.onSessionSwitch(track, scene, lin);
     root.append(
       this.topbar,
-      h("div", { class: "main-view" }, this.session, this.arrangementHost),
+      h("div", { class: "main-view" }, this.browserHost, h("div", { class: "views" }, this.session, this.arrangementHost)),
       h("div", { class: "lower" }, this.editorHost, h("div", { class: "side" }, this.deviceHost, this.toolsHost)),
       h("footer", { class: "statusbar" }, "Space: Play/Stop · Tab: Session/Arrangement · Doppelklick: Clip anlegen · Clips aus dem Raster in die Zeitleiste ziehen · Entf: Clip löschen · Strg+D: duplizieren · Strg+Z: Rückgängig"),
     );
@@ -128,7 +142,81 @@ export class App {
       this.engine.setProject(this.project);
     }
     this.project.tracks.forEach((_, i) => this.engine.refreshInstrument(i));
+    this.preloadSamples();
     this.changed();
+  }
+
+  /** Decodes every sample the project uses so playback can start without gaps. */
+  preloadSamples() {
+    const ids = new Set<string>();
+    for (const t of this.project.tracks) {
+      for (const c of t.clips) if (c?.audio) ids.add(c.audio.sampleId);
+      for (const a of t.arrangement) if (a.clip.audio) ids.add(a.clip.audio.sampleId);
+    }
+    for (const id of ids) void this.engine.samples.load(id);
+  }
+
+  sampleInUse(id: string): boolean {
+    return this.project.tracks.some((t) => t.clips.some((c) => c?.audio?.sampleId === id) || t.arrangement.some((a) => a.clip.audio?.sampleId === id));
+  }
+
+  /** Resolves a drop (library sample or files from the OS) to sample metadata. */
+  async samplesFromDrop(e: DragEvent): Promise<SampleMeta[]> {
+    const id = e.dataTransfer?.getData(SAMPLE_DRAG_TYPE);
+    if (id) {
+      const meta = this.engine.samples.meta(id);
+      return meta ? [meta] : [];
+    }
+    const files = e.dataTransfer?.files;
+    return files?.length ? this.browser.importFiles([...files]) : [];
+  }
+
+  /** True if a drag carries a sample or audio files. */
+  static isSampleDrag(e: DragEvent): boolean {
+    const types = e.dataTransfer?.types ?? [];
+    return types.includes(SAMPLE_DRAG_TYPE) || types.includes("Files");
+  }
+
+  /** Puts a sample into a session slot (converting the track to an audio track if it is empty). */
+  placeSampleInSlot(track: number, scene: number, meta: SampleMeta) {
+    const tr = this.project.tracks[track];
+    if (!tr) return;
+    this.checkpoint();
+    if (!this.ensureAudioTrack(track)) return;
+    tr.clips[scene] = createAudioClip(meta.name, meta.id, meta.duration, this.project.bpm);
+    void this.engine.samples.load(meta.id);
+    this.selection = { track, scene, arr: null };
+    this.changed();
+  }
+
+  placeSampleOnArrangement(track: number, start: number, meta: SampleMeta) {
+    const tr = this.project.tracks[track];
+    if (!tr) return;
+    this.checkpoint();
+    if (!this.ensureAudioTrack(track)) return;
+    const clip = createAudioClip(meta.name, meta.id, meta.duration, this.project.bpm);
+    const ac: ArrangementClip = { start: Math.max(0, start), length: clip.length, clip };
+    tr.arrangement.push(ac);
+    trimOverlaps(tr.arrangement, ac);
+    tr.arrangement.sort((a, b) => a.start - b.start);
+    void this.engine.samples.load(meta.id);
+    this.selection = { track, scene: this.selection.scene, arr: tr.arrangement.indexOf(ac) };
+    this.changed();
+  }
+
+  /** Audio can only go on audio tracks; an empty track is converted automatically. */
+  private ensureAudioTrack(track: number): boolean {
+    const tr = this.project.tracks[track];
+    if (tr.instrument === "audio") return true;
+    const empty = tr.clips.every((c) => !c) && tr.arrangement.length === 0;
+    if (!empty) {
+      this.toast("Samples gehören auf eine Audiospur. Stell die Spur auf „Audio“ um oder nimm eine leere Spur.");
+      return false;
+    }
+    tr.instrument = "audio";
+    if (/^(Synth|Drums) \d+$/.test(tr.name)) tr.name = `Audio ${track + 1}`;
+    this.engine.refreshInstrument(track);
+    return true;
   }
 
   private scheduleSave() {
@@ -270,6 +358,8 @@ export class App {
 
   renderAll() {
     this.renderTopbar();
+    this.browserHost.hidden = !this.showBrowser;
+    if (this.showBrowser) this.browser.render(this.browserHost);
     this.session.hidden = this.view !== "session";
     this.arrangementHost.hidden = this.view !== "arrangement";
     if (this.view === "session") this.renderSession();
@@ -359,6 +449,7 @@ export class App {
         h("button", { class: "btn", title: "Rückgängig (Strg+Z)", onclick: () => this.undo() }, "↶"),
         h("button", { class: "btn", title: "Wiederholen (Strg+Shift+Z)", onclick: () => this.redo() }, "↷"),
         h("button", { class: "btn", onclick: () => confirmNew(this) }, "Neu"),
+        h("button", { class: `btn ${this.showBrowser ? "on" : ""}`, title: "Sample-Browser ein-/ausblenden", onclick: () => ((this.showBrowser = !this.showBrowser), this.renderAll()) }, "Samples"),
         h("button", { class: "btn", onclick: () => fileInput.click() }, "Öffnen"),
         h("button", { class: "btn", onclick: () => download(`${p.name || "project"}.opendaw.json`, serializeProject(p), "application/json") }, "Speichern"),
         fileInput,
@@ -455,7 +546,7 @@ export class App {
   private recordNoteOn(pitch: number, velocity: number, channel: number) {
     const clip = this.selectedClip;
     const at = this.selectedClipPosition();
-    if (!clip || !at) return;
+    if (!clip || !at || clip.audio) return;
     let start = at.pos;
     if (this.recordQuantize) start = (Math.round(start * STEPS_PER_BEAT) / STEPS_PER_BEAT) % clip.length;
     this.checkpoint();
@@ -502,7 +593,7 @@ export class App {
           "div",
           { class: `track-head ${ti === this.selection.track ? "selected" : ""}`, style: { borderTopColor: tr.color }, onclick: (e: Event) => e.target === e.currentTarget && this.select(ti, this.selection.scene) },
           name,
-          select<InstrumentKind>(tr.instrument, [{ value: "synth", label: "Synth" }, { value: "drums", label: "Drums" }], (v) => {
+          select<InstrumentKind>(tr.instrument, [{ value: "synth", label: "Synth" }, { value: "drums", label: "Drums" }, { value: "audio", label: "Audio" }], (v) => {
             this.checkpoint();
             tr.instrument = v;
             this.engine.refreshInstrument(ti);
@@ -536,8 +627,24 @@ export class App {
             "data-scene": s,
             style: clip ? { "--clip-color": tr.color } : {},
             onclick: () => this.select(ti, s),
-            ondblclick: () => {
-              if (!clip) this.createClipAt(ti, s);
+            ondblclick: async () => {
+              if (clip) return;
+              if (tr.instrument !== "audio") return this.createClipAt(ti, s);
+              const [meta] = await this.browser.pickFiles(false);
+              if (meta) this.placeSampleInSlot(ti, s, meta);
+            },
+            ondragover: (e: DragEvent) => {
+              if (!App.isSampleDrag(e)) return;
+              e.preventDefault();
+              (e.currentTarget as HTMLElement).classList.add("drop");
+            },
+            ondragleave: (e: DragEvent) => (e.currentTarget as HTMLElement).classList.remove("drop"),
+            ondrop: async (e: DragEvent) => {
+              (e.currentTarget as HTMLElement).classList.remove("drop");
+              if (!App.isSampleDrag(e)) return;
+              e.preventDefault();
+              const [meta] = await this.samplesFromDrop(e);
+              if (meta) this.placeSampleInSlot(ti, s, meta);
             },
           },
           clip
