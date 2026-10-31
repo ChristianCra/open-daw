@@ -1,6 +1,6 @@
 [package]
 name = "open-daw"
-version = "0.1.1"
+version = "0.1.2"
 description = "open-daw desktop shell"
 authors = ["open-daw contributors"]
 license = "MIT"

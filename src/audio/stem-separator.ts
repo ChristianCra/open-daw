@@ -20,6 +20,13 @@ export interface Stem {
   channels: Float32Array[];
 }
 
+/** "45 s", "3 min", "1 h 5 min" */
+export function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${Math.max(1, Math.round(seconds))} s`;
+  const min = Math.round(seconds / 60);
+  return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${min % 60} min`;
+}
+
 const mb = (n: number) => `${(n / 1024 / 1024).toFixed(0)} MB`;
 
 /** True when the model is already in the browser's cache. */
@@ -87,7 +94,7 @@ export async function toModelFormat(buf: AudioBuffer): Promise<[Float32Array, Fl
 }
 
 const BACKEND_LABEL: Record<Backend, string> = { webgpu: "WebGPU", wasm: "WebAssembly" };
-const GPU_BROKEN_KEY = "open-daw.stems.webgpu-broken";
+const GPU_BROKEN_KEY = "open-daw.stems.webgpu-broken.v2";
 
 function gpuBroken(): boolean {
   try {
@@ -136,6 +143,7 @@ export class StemSeparator {
 
   private request(msg: WorkerRequest, transfer: Transferable[], onProgress?: (p: SeparationProgress) => void, signal?: AbortSignal): Promise<WorkerResponse> {
     const worker = this.worker!;
+    let started = performance.now();
     return new Promise((resolve, reject) => {
       const abort = () => {
         this.dispose();
@@ -146,7 +154,10 @@ export class StemSeparator {
       worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
         const m = e.data;
         if (m.type === "progress") {
-          onProgress?.({ stage: "separate", fraction: m.done / m.total, detail: `Trennen: Abschnitt ${Math.min(m.done + 1, m.total)} von ${m.total}` });
+          if (m.done === 0) started = performance.now();
+          const left = m.done > 0 && m.done < m.total ? ((performance.now() - started) / m.done) * (m.total - m.done) : 0;
+          const eta = left ? `, noch etwa ${formatDuration(left / 1000)}` : "";
+          onProgress?.({ stage: "separate", fraction: m.done / m.total, detail: `Trennen: Abschnitt ${Math.min(m.done + 1, m.total)} von ${m.total}${eta}` });
           return;
         }
         signal?.removeEventListener("abort", abort);
