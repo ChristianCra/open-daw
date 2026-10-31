@@ -8,7 +8,7 @@ Legende: ✅ vorhanden · 🟡 teilweise · 🗺️ geplant · ⛔ nicht machbar
 | Feature | Status | Notiz |
 | --- | --- | --- |
 | Stem-Trennung (Vocals, Drums, Bass, Rest) | 🗺️ | Audiospuren sind da. Plan: offenes Modell (z. B. Demucs, MIT) per ONNX Runtime Web/nativ |
-| Ähnliche Samples finden | 🗺️ | Audio-Features (MFCC/Spektrum) lokal berechnen, Nächste-Nachbarn-Suche |
+| Ähnliche Samples finden | ✅ | „≈“ im Sample-Browser. Klangfarbe (Spektrum, Bänder, Rauschanteil) und Hüllkurve werden lokal berechnet, sortiert nach Ähnlichkeit. Geplant: Ähnlichkeit zu einem Ausschnitt im Arrangement |
 | Splice-Integration | ⛔ | Proprietärer Dienst ohne offene API. Stattdessen: eigene Sample-Ordner, später offene Quellen (z. B. Freesound-API) |
 | Audiospuren und Sample-Import | ✅ | WAV/MP3/OGG/FLAC importieren, Audio-Clips in Session und Arrangement, Gain, Repitch auf Projekttempo, Start mitten im Clip |
 | Time-Stretching ohne Tonhöhenänderung | 🗺️ | Bisher folgt das Sample dem Tempo per Repitch (wie Bandgeschwindigkeit) |
@@ -56,7 +56,7 @@ Legende: ✅ vorhanden · 🟡 teilweise · 🗺️ geplant · ⛔ nicht machbar
 | Feature | Status | Notiz |
 | --- | --- | --- |
 | Browser mit Tags, Filtern, eigenen Kategorien | ✅ | Sample-Browser: Suche, Tag-Filter, Favoriten, Tags bearbeiten, Vorhören. Tags werden aus dem Dateinamen vorgeschlagen. Gespeichert in IndexedDB |
-| Ähnliche Dateien anzeigen | 🗺️ | Siehe „Ähnliche Samples finden“ |
+| Ähnliche Dateien anzeigen | ✅ | Siehe „Ähnliche Samples finden“ |
 | Undo/Redo | ✅ | |
 | Speichern/Laden | ✅ | JSON-Projektdatei + automatisches Zwischenspeichern |
 

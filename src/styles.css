@@ -1141,3 +1141,22 @@ input:not([type]) {
 .roll-scroll {
   user-select: none;
 }
+.similar-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg2));
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.sample .score {
+  font-size: 10px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.icon.on {
+  color: var(--accent);
+}

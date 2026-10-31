@@ -1,6 +1,7 @@
 // Sample browser: import audio files, search, filter by tags and favourites,
 // preview, edit tags and drag samples onto audio tracks.
 
+import { rankSimilar } from "../audio/features";
 import { filterSamples, tagCounts, type SampleFilter, type SampleMeta } from "../audio/samples";
 import type { App } from "./app";
 import { h } from "./dom";
@@ -13,6 +14,8 @@ export class SampleBrowser {
   private listEl: HTMLElement | null = null;
   private editing: string | null = null;
   private previewing: string | null = null;
+  /** Sample whose similar sounds are listed (null = normal list) */
+  similarTo: string | null = null;
 
   constructor(private app: App) {}
 
@@ -119,7 +122,29 @@ export class SampleBrowser {
     const list = this.listEl;
     if (!list) return;
     const lib = this.app.engine.samples;
-    const items = filterSamples(lib.list(), this.filter);
+    let items = filterSamples(lib.list(), this.filter);
+    let scores: Map<string, number> | null = null;
+    const target = this.similarTo ? lib.meta(this.similarTo) : undefined;
+    if (this.similarTo && !target) this.similarTo = null;
+    if (target) {
+      if (!target.features || lib.list().some((s) => !s.features)) {
+        list.replaceChildren(h("p", { class: "hint pad" }, "Analysiere Samples …"));
+        void lib.analyzeMissing().then(() => this.renderList());
+        return;
+      }
+      const ranked = rankSimilar(target.features, items.filter((s) => s.id !== target.id), lib.list().flatMap((s) => (s.features ? [s.features] : [])));
+      scores = new Map(ranked.map((r) => [r.item.id, r.score]));
+      items = ranked.map((r) => r.item);
+    }
+    const head = target
+      ? h(
+          "div",
+          { class: "similar-head" },
+          h("span", {}, "Ähnlich wie ", h("b", {}, target.name)),
+          h("span", { class: "spacer" }),
+          h("button", { class: "icon", title: "Zurück zur Liste", onclick: () => ((this.similarTo = null), this.renderList()) }, "×"),
+        )
+      : null;
     if (!items.length) {
       list.replaceChildren(
         h(
@@ -128,12 +153,13 @@ export class SampleBrowser {
           lib.list().length ? "Keine Treffer." : "Noch keine Samples. Importiere Audiodateien mit „+ Import“ oder zieh sie hierher.",
         ),
       );
+      if (head) list.prepend(head);
       return;
     }
-    list.replaceChildren(...items.map((s) => this.renderItem(s)));
+    list.replaceChildren(...(head ? [head] : []), ...items.map((s) => this.renderItem(s, scores?.get(s.id))));
   }
 
-  private renderItem(s: SampleMeta): HTMLElement {
+  private renderItem(s: SampleMeta, score?: number): HTMLElement {
     const lib = this.app.engine.samples;
     const wave = h("canvas", { class: "mini-wave", width: 120, height: 22 });
     drawPeaks(wave, s.peaks, "#8b93a5");
@@ -186,6 +212,20 @@ export class SampleBrowser {
           this.previewing === s.id ? "■" : "▶",
         ),
         h("span", { class: "sample-name" }, s.name),
+        score !== undefined ? h("span", { class: "score", title: "Ähnlichkeit" }, `${Math.round(score * 100)}%`) : null,
+        h(
+          "button",
+          {
+            class: `icon ${this.similarTo === s.id ? "on" : ""}`,
+            title: "Ähnliche Samples finden",
+            onclick: () => {
+              this.similarTo = s.id;
+              this.renderList();
+              this.listEl?.scrollTo({ top: 0 });
+            },
+          },
+          "≈",
+        ),
         h("button", { class: `icon fav ${s.favorite ? "on" : ""}`, title: "Favorit", onclick: () => void lib.update(s.id, { favorite: !s.favorite }) }, "★"),
         h(
           "button",
