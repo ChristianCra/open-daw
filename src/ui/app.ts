@@ -235,6 +235,41 @@ export class App {
     this.toast(`„${tr.name}“ angelegt, „${src.name}“ ist stummgeschaltet.`);
   }
 
+  /**
+   * Puts separated stems on new audio tracks below `after`. Each new clip
+   * copies the source clip (position, length, gain, tempo) with the stem's
+   * sample, so together they sound like the original. The source track is muted.
+   */
+  insertStemTracks(after: number, stems: { label: string; meta: SampleMeta }[], source: { scene: number | null; arr: number | null }) {
+    const src = this.project.tracks[after];
+    const srcClip = source.arr !== null ? src?.arrangement[source.arr]?.clip : source.scene !== null ? src?.clips[source.scene] : null;
+    if (!src || !srcClip?.audio) return;
+    this.checkpoint();
+    const tracks = stems.map(({ label, meta }, k) => {
+      const tr = createTrack(after + 1 + k, "audio", this.project.sceneCount);
+      tr.name = `${src.name} ${label}`;
+      tr.volume = src.volume;
+      tr.pan = src.pan;
+      const clip = cloneClip(srcClip);
+      clip.name = `${srcClip.name} ${label}`;
+      clip.audio = { ...srcClip.audio!, sampleId: meta.id };
+      if (source.arr !== null) {
+        const ac = src.arrangement[source.arr];
+        tr.arrangement.push({ start: ac.start, length: ac.length, offset: ac.offset, clip });
+      } else if (source.scene !== null) {
+        tr.clips[source.scene] = clip;
+      }
+      return tr;
+    });
+    this.project.tracks.splice(after + 1, 0, ...tracks);
+    src.mute = true;
+    this.engine.setProject(this.project);
+    for (let k = 0; k < tracks.length; k++) this.arrangement.trackInserted(after + 1);
+    this.selection = { track: after + 1, scene: source.scene ?? this.selection.scene, arr: source.arr !== null ? 0 : null };
+    this.changed();
+    this.toast(`${tracks.length} Stem-Spuren angelegt, „${src.name}“ ist stummgeschaltet.`);
+  }
+
   /** Audio can only go on audio tracks; an empty track is converted automatically. */
   private ensureAudioTrack(track: number): boolean {
     const tr = this.project.tracks[track];

@@ -24,6 +24,7 @@ kein UI-Design anderer DAWs. Mehr dazu in [docs/REVERSE-ENGINEERING.md](docs/REV
 - **Effekte**: „Drive“ (3-Band-Sättigung), Delay-Send
 - **Mixer** mit Pegelanzeige, Pan, Mute, Solo
 - **MIDI-Keyboards** über Web MIDI: live spielen, aufnehmen, Pitchbend/MPE
+- **Stem-Trennung**: Samples und Audio-Clips lokal in Drums, Bass, Gesang und Rest zerlegen
 - **Bounce auf neue Spur** (Instrument, Effekte und Automation als Audio) und **WAV-Export** des Arrangements
 - Undo/Redo, Speichern/Öffnen als JSON, Export einzelner Clips als MIDI-Datei
 - Windows-Installer (.exe/.msi) über Tauri, außerdem installierbar als Web-App (PWA)
@@ -82,6 +83,7 @@ Installer und hängt sie an einen Release-Entwurf.
 | Punkt fein bewegen | Pfeiltasten (Shift: grob, Alt: fein), Entf löscht |
 | Clip anlegen | Doppelklick auf leeren Slot (bei Audiospuren: Datei wählen) |
 | Sample importieren | „+ Import“ im Sample-Browser oder Dateien auf den Browser ziehen |
+| In Stems trennen | „✂“ neben einem Sample oder „Stems ✂“ im Editor eines Audio-Clips |
 | Ähnliche Samples finden | „≈“ neben einem Sample im Browser |
 | Sample verwenden | Aus dem Browser in einen Slot oder in die Zeitleiste ziehen (leere Spuren werden zur Audiospur) |
 | Sample an Clip-Länge anpassen | „An Clip anpassen“ im Clip-Editor (setzt die Sample-BPM) |
@@ -117,3 +119,10 @@ Eigene Generatoren oder Transformationen lassen sich mit `registerMidiTool()` hi
 ## Lizenz
 
 MIT, siehe [LICENSE](LICENSE).
+
+Fremde Bestandteile:
+
+- [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (MIT) führt das Modell zur Stem-Trennung aus.
+- Das Modell [HT-Demucs](https://github.com/facebookresearch/demucs) (MIT, Meta) wird erst bei der ersten
+  Stem-Trennung von Hugging Face geladen ([ONNX-Export](https://huggingface.co/StemSplitio/htdemucs-onnx))
+  und ist nicht Teil dieses Repositorys.

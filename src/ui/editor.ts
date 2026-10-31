@@ -7,6 +7,7 @@ import { getScale, inScale, isRoot } from "../music/scales";
 import type { App } from "./app";
 import { drawPeaks } from "./browser";
 import { h, select, slider } from "./dom";
+import { openStemDialog } from "./stems";
 
 const ROW_H = 16;
 const STEP_W = 22;
@@ -462,6 +463,16 @@ export class ClipEditor {
           },
         },
         "An Clip anpassen",
+      ),
+      h(
+        "button",
+        {
+          class: "btn small",
+          title: "In Drums, Bass, Gesang und Rest trennen und auf neue Spuren legen",
+          disabled: !meta,
+          onclick: () => void openStemDialog(app, { sampleId: audio.sampleId, clip: { track: app.selection.track, scene: app.selection.arr === null ? app.selection.scene : null, arr: app.selection.arr } }),
+        },
+        "Stems ✂",
       ),
       h("span", { class: "spacer" }),
       h("button", { class: "btn small danger", title: "Clip löschen", onclick: () => app.deleteSelectedClip() }, "Löschen"),
