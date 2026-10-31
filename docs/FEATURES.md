@@ -63,7 +63,7 @@ Legende: ✅ vorhanden · 🟡 teilweise · 🗺️ geplant · ⛔ nicht machbar
 | Feature | Status | Notiz |
 | --- | --- | --- |
 | Clip-Raster + Mixer + Geräte + Editor gleichzeitig | ✅ | Alles in einem Fenster |
-| Arrangement-Zeitleiste | 🗺️ | Nächster großer Schritt |
+| Arrangement-Zeitleiste | ✅ | Clips ziehen/verschieben/kürzen, Loop-Bereich, Session-Jam aufnehmen, „Zurück zum Arrangement“ |
 | Automation mit Tastatursteuerung | 🗺️ | Nach der Arrangement-Ansicht |
 | Bounce auf neue Spur | 🗺️ | Braucht Audiospuren + Offline-Rendering |
 

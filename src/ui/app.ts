@@ -6,13 +6,18 @@ import { MidiInput, type MidiEvent } from "../engine/midi-input";
 import { clipPosition } from "../engine/scheduler";
 import { clipToMidiFile } from "../midi/smf";
 import {
+  arrangementEnd,
+  BEATS_PER_BAR,
+  cloneClip,
   createClip,
+  trimOverlaps,
   createDemoProject,
   createTrack,
   NOTE_NAMES,
   parseProject,
   serializeProject,
   STEPS_PER_BEAT,
+  type ArrangementClip,
   type InstrumentKind,
   type Note,
   type Project,
@@ -20,6 +25,7 @@ import {
 import { SCALES } from "../music/scales";
 import { TUNINGS } from "../music/tuning";
 import { download, h, select, slider } from "./dom";
+import { ArrangementView, CLIP_DRAG_TYPE } from "./arrangement";
 import { ClipEditor } from "./editor";
 import { renderDevicePanel, renderToolsPanel, type ToolState } from "./panels";
 
@@ -29,12 +35,21 @@ const MAX_UNDO = 100;
 export interface Selection {
   track: number;
   scene: number;
+  /** Index into the track's arrangement when an arrangement clip is selected */
+  arr: number | null;
 }
+
+export type View = "session" | "arrangement";
 
 export class App {
   project: Project;
   engine: AudioEngine;
-  selection: Selection = { track: 0, scene: 0 };
+  selection: Selection = { track: 0, scene: 0, arr: null };
+  view: View = "session";
+  /** Records session clip launches onto the arrangement timeline */
+  arrRecording = false;
+  private openArrClips = new Map<number, ArrangementClip>();
+  private arrangement: ArrangementView;
   tools: ToolState = { toolId: "gen-melody", params: {}, seed: 1 };
   private undoStack: string[] = [];
   private redoStack: string[] = [];
@@ -49,6 +64,7 @@ export class App {
 
   private topbar = h("header", { class: "topbar" });
   private session = h("section", { class: "session" });
+  private arrangementHost = h("section", { class: "arrangement" });
   private editorHost = h("section", { class: "panel editor-panel" });
   private deviceHost = h("section", { class: "panel device-panel" });
   private toolsHost = h("section", { class: "panel tools-panel" });
@@ -57,11 +73,13 @@ export class App {
     this.project = loadStoredProject() ?? createDemoProject();
     this.engine = new AudioEngine(this.project);
     this.editor = new ClipEditor(this);
+    this.arrangement = new ArrangementView(this);
+    this.engine.onSessionSwitch = (track, scene, lin) => this.onSessionSwitch(track, scene, lin);
     root.append(
       this.topbar,
-      this.session,
+      h("div", { class: "main-view" }, this.session, this.arrangementHost),
       h("div", { class: "lower" }, this.editorHost, h("div", { class: "side" }, this.deviceHost, this.toolsHost)),
-      h("footer", { class: "statusbar" }, "Space: Play/Stop · Doppelklick auf leeren Slot: Clip anlegen · Shift+Klick auf Note: Wahrscheinlichkeit · Strg+Z: Rückgängig"),
+      h("footer", { class: "statusbar" }, "Space: Play/Stop · Tab: Session/Arrangement · Doppelklick: Clip anlegen · Clips aus dem Raster in die Zeitleiste ziehen · Entf: Clip löschen · Strg+D: duplizieren · Strg+Z: Rückgängig"),
     );
     this.midi.onEvent = (ev) => this.onMidi(ev);
     this.midi.onDevicesChanged = () => this.renderTopbar();
@@ -128,7 +146,8 @@ export class App {
     this.checkpoint();
     this.project = p;
     this.engine.setProject(p);
-    this.selection = { track: 0, scene: 0 };
+    this.engine.onSessionSwitch = (track, scene, lin) => this.onSessionSwitch(track, scene, lin);
+    this.selection = { track: 0, scene: 0, arr: null };
     this.changed();
   }
 
@@ -137,19 +156,124 @@ export class App {
   }
 
   get selectedClip() {
-    return this.selectedTrack?.clips[this.selection.scene] ?? null;
+    const { arr, scene } = this.selection;
+    if (arr !== null) return this.selectedTrack?.arrangement[arr]?.clip ?? null;
+    return this.selectedTrack?.clips[scene] ?? null;
   }
 
   select(track: number, scene: number) {
-    this.selection = { track, scene };
+    this.selection = { track, scene, arr: null };
     this.renderAll();
+  }
+
+  selectArrangementClip(track: number, index: number | null) {
+    this.selection = { ...this.selection, track, arr: index };
+    this.renderAll();
+  }
+
+  setView(view: View) {
+    this.view = view;
+    this.renderAll();
+  }
+
+  /**
+   * Where the transport currently is inside the selected clip, or null when
+   * that clip isn't playing. Used for the editor playhead and MIDI recording.
+   */
+  selectedClipPosition(): { pos: number; beat: number } | null {
+    const clip = this.selectedClip;
+    const { track, scene, arr } = this.selection;
+    const st = this.engine.playStates[track];
+    const beat = this.engine.currentBeat;
+    if (!clip || !this.engine.playing || clip.length <= 0) return null;
+    if (arr !== null) {
+      const ac = this.project.tracks[track]?.arrangement[arr];
+      if (!ac || !this.engine.followArrangement[track] || st?.playing) return null;
+      const tl = this.engine.timelineBeat;
+      if (tl < ac.start || tl >= ac.start + ac.length) return null;
+      return { pos: (tl - ac.start + (ac.offset ?? 0)) % clip.length, beat };
+    }
+    if (st?.playing?.scene !== scene || beat < st.playing.startBeat) return null;
+    return { pos: (beat - st.playing.startBeat) % clip.length, beat };
+  }
+
+  // ------------------------------------------------- arrangement recording
+
+  toggleArrangementRecord() {
+    if (this.arrRecording) {
+      this.finishArrangementRecord();
+    } else {
+      this.checkpoint();
+      this.arrRecording = true;
+      // Tracks that are already playing a session clip get captured from now on.
+      if (this.engine.playing) {
+        this.engine.playStates.forEach((st, i) => {
+          if (st.playing) this.onSessionSwitch(i, st.playing.scene, Math.max(0, this.engine.currentBeat));
+        });
+      }
+    }
+    this.renderAll();
+  }
+
+  private onSessionSwitch(track: number, scene: number | null, linearBeat: number) {
+    if (!this.arrRecording) return;
+    const tl = this.engine.toTimeline(linearBeat);
+    this.closeArrClip(track, tl);
+    const tr = this.project.tracks[track];
+    const src = scene !== null ? tr?.clips[scene] : null;
+    if (!tr || !src) return;
+    // Anything already on the timeline under the new recording is replaced.
+    const ac: ArrangementClip = { start: tl, length: 0, clip: cloneClip(src) };
+    tr.arrangement.push(ac);
+    this.openArrClips.set(track, ac);
+  }
+
+  private closeArrClip(track: number, tl: number) {
+    const open = this.openArrClips.get(track);
+    if (!open) return;
+    this.openArrClips.delete(track);
+    open.length = Math.max(0, tl - open.start);
+    const tr = this.project.tracks[track];
+    if (open.length < 0.25) tr.arrangement = tr.arrangement.filter((a) => a !== open);
+    else trimOverlaps(tr.arrangement, open);
+    tr.arrangement.sort((a, b) => a.start - b.start);
+  }
+
+  private finishArrangementRecord() {
+    // Snap the end of a recording to the 16th-note grid.
+    const tl = this.engine.playing ? Math.round(this.engine.timelineBeat * STEPS_PER_BEAT) / STEPS_PER_BEAT : 0;
+    for (const track of [...this.openArrClips.keys()]) this.closeArrClip(track, tl);
+    this.arrRecording = false;
+    this.changed();
+  }
+
+  /** Grows the clips that are currently being recorded (called every frame). */
+  private growOpenArrClips() {
+    if (!this.arrRecording || !this.engine.playing) return;
+    const tl = this.engine.timelineBeat;
+    for (const ac of this.openArrClips.values()) ac.length = Math.max(0, tl - ac.start);
+  }
+
+  get arrangementLength(): number {
+    const bars = Math.ceil(Math.max(arrangementEnd(this.project), this.engine.timelineBeat, this.project.loop.end) / BEATS_PER_BAR);
+    return Math.max(64, bars + 16) * BEATS_PER_BAR;
   }
 
   // ------------------------------------------------------------------ render
 
+  /** Re-renders editor, device and tools panels only (cheap, keeps the main view intact). */
+  refreshPanels() {
+    this.editor.render(this.editorHost);
+    renderDevicePanel(this, this.deviceHost);
+    renderToolsPanel(this, this.toolsHost);
+  }
+
   renderAll() {
     this.renderTopbar();
-    this.renderSession();
+    this.session.hidden = this.view !== "session";
+    this.arrangementHost.hidden = this.view !== "arrangement";
+    if (this.view === "session") this.renderSession();
+    else this.arrangement.render(this.arrangementHost);
     this.editor.render(this.editorHost);
     renderDevicePanel(this, this.deviceHost);
     renderToolsPanel(this, this.toolsHost);
@@ -158,7 +282,7 @@ export class App {
   renderTopbar() {
     const p = this.project;
     const playBtn = h("button", { class: "btn play", title: "Play (Space)", onclick: () => this.togglePlay() }, "▶");
-    const stopBtn = h("button", { class: "btn", title: "Stop", onclick: () => this.engine.stop() }, "■");
+    const stopBtn = h("button", { class: "btn", title: "Stop", onclick: () => this.stopTransport() }, "■");
     const bpm = h("input", {
       type: "number",
       class: "bpm",
@@ -189,6 +313,12 @@ export class App {
     });
     this.topbar.replaceChildren(
       h("div", { class: "brand" }, "open-daw"),
+      h(
+        "div",
+        { class: "group tabs" },
+        h("button", { class: `btn tab ${this.view === "session" ? "on" : ""}`, title: "Session-Ansicht (Tab)", onclick: () => this.setView("session") }, "Session"),
+        h("button", { class: `btn tab ${this.view === "arrangement" ? "on" : ""}`, title: "Arrangement-Ansicht (Tab)", onclick: () => this.setView("arrangement") }, "Arrangement"),
+      ),
       h("div", { class: "group" }, playBtn, stopBtn, position),
       h("div", { class: "group" }, h("span", { class: "lbl" }, "BPM"), bpm),
       h(
@@ -322,18 +452,9 @@ export class App {
     }
   }
 
-  /** Clip-relative position of the transport for the selected clip, or null if it isn't playing. */
-  private recordPosition(): { pos: number; beat: number } | null {
-    const clip = this.selectedClip;
-    const st = this.engine.playStates[this.selection.track];
-    const beat = this.engine.currentBeat;
-    if (!clip || !this.engine.playing || st?.playing?.scene !== this.selection.scene || beat < st.playing.startBeat) return null;
-    return { pos: (beat - st.playing.startBeat) % clip.length, beat };
-  }
-
   private recordNoteOn(pitch: number, velocity: number, channel: number) {
     const clip = this.selectedClip;
-    const at = this.recordPosition();
+    const at = this.selectedClipPosition();
     if (!clip || !at) return;
     let start = at.pos;
     if (this.recordQuantize) start = (Math.round(start * STEPS_PER_BEAT) / STEPS_PER_BEAT) % clip.length;
@@ -403,6 +524,14 @@ export class App {
           "div",
           {
             class: cls,
+            draggable: !!clip,
+            title: clip ? "In die Arrangement-Zeitleiste ziehen, um den Clip zu platzieren" : undefined,
+            ondragstart: (e: DragEvent) => {
+              e.dataTransfer?.setData(CLIP_DRAG_TYPE, JSON.stringify({ track: ti, scene: s }));
+              if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
+              // Switch to the timeline shortly after the drag started so the clip can be dropped there.
+              setTimeout(() => this.showDropTarget(), 250);
+            },
             "data-track": ti,
             "data-scene": s,
             style: clip ? { "--clip-color": tr.color } : {},
@@ -452,21 +581,39 @@ export class App {
   // ----------------------------------------------------------------- actions
 
   togglePlay() {
-    if (this.engine.playing) {
+    if (this.engine.playing) this.stopTransport();
+    else void this.engine.play();
+  }
+
+  stopTransport() {
+    if (this.arrRecording) {
+      this.finishArrangementRecord();
       this.engine.stop();
-      if (this.recording) this.toggleRecord();
-    } else void this.engine.play();
+      // After recording a jam, play back what was recorded.
+      this.engine.backToArrangement();
+    } else this.engine.stop();
+    if (this.recording) this.toggleRecord();
+    this.renderTopbar();
   }
 
   createClipAt(track: number, scene: number) {
     this.checkpoint();
     this.project.tracks[track].clips[scene] = createClip(`Clip ${scene + 1}`);
-    this.selection = { track, scene };
+    this.selection = { track, scene, arr: null };
     this.changed();
   }
 
   deleteSelectedClip() {
-    const { track, scene } = this.selection;
+    const { track, scene, arr } = this.selection;
+    if (arr !== null) {
+      const tr = this.project.tracks[track];
+      if (!tr?.arrangement[arr]) return;
+      this.checkpoint();
+      tr.arrangement.splice(arr, 1);
+      this.selection = { ...this.selection, arr: null };
+      this.changed();
+      return;
+    }
     if (!this.project.tracks[track]?.clips[scene]) return;
     this.checkpoint();
     this.project.tracks[track].clips[scene] = null;
@@ -477,6 +624,66 @@ export class App {
     const clip = this.selectedClip;
     if (!clip) return;
     download(`${clip.name || "clip"}.mid`, clipToMidiFile(clip, this.project.bpm, this.selectedTrack.instrument === "drums" ? 9 : 0) as Uint8Array<ArrayBuffer>, "audio/midi");
+  }
+
+  duplicateArrangementClip() {
+    const { track, arr } = this.selection;
+    const tr = this.project.tracks[track];
+    const ac = arr !== null ? tr?.arrangement[arr] : null;
+    if (!tr || !ac) return;
+    this.checkpoint();
+    const copy: ArrangementClip = { start: ac.start + ac.length, length: ac.length, clip: cloneClip(ac.clip) };
+    tr.arrangement.push(copy);
+    trimOverlaps(tr.arrangement, copy);
+    tr.arrangement.sort((a, b) => a.start - b.start);
+    this.selection = { ...this.selection, arr: tr.arrangement.indexOf(copy) };
+    this.changed();
+  }
+
+  /** Copies a session clip onto the timeline (drag & drop from the grid). */
+  placeOnArrangement(track: number, clipSrc: { track: number; scene: number }, start: number) {
+    const src = this.project.tracks[clipSrc.track]?.clips[clipSrc.scene];
+    const tr = this.project.tracks[track];
+    if (!src || !tr) return;
+    this.checkpoint();
+    const ac: ArrangementClip = { start: Math.max(0, start), length: src.length, clip: cloneClip(src) };
+    tr.arrangement.push(ac);
+    trimOverlaps(tr.arrangement, ac);
+    tr.arrangement.sort((a, b) => a.start - b.start);
+    this.selection = { track, scene: this.selection.scene, arr: tr.arrangement.indexOf(ac) };
+    this.changed();
+  }
+
+  private dropHint: HTMLElement | null = null;
+
+  /** While dragging a clip in the session view, offer a drop zone that opens the arrangement. */
+  private showDropTarget() {
+    if (this.view !== "session" || this.dropHint) return;
+    const hint = h("div", { class: "drop-hint" }, "Hierher ziehen: zur Arrangement-Ansicht wechseln");
+    const remove = () => {
+      hint.remove();
+      this.dropHint = null;
+    };
+    hint.addEventListener("dragenter", () => {
+      remove();
+      this.setView("arrangement");
+    });
+    window.addEventListener("dragend", remove, { once: true });
+    this.dropHint = hint;
+    this.root.append(hint);
+  }
+
+  /** Creates an empty one-bar clip on the timeline. */
+  createArrangementClip(track: number, start: number) {
+    const tr = this.project.tracks[track];
+    if (!tr) return;
+    this.checkpoint();
+    const ac: ArrangementClip = { start: Math.max(0, start), length: BEATS_PER_BAR, clip: createClip("Clip") };
+    tr.arrangement.push(ac);
+    trimOverlaps(tr.arrangement, ac);
+    tr.arrangement.sort((a, b) => a.start - b.start);
+    this.selection = { track, scene: this.selection.scene, arr: tr.arrangement.indexOf(ac) };
+    this.changed();
   }
 
   addTrack() {
@@ -500,6 +707,15 @@ export class App {
     if (e.code === "Space") {
       e.preventDefault();
       this.togglePlay();
+    } else if (e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      e.preventDefault();
+      this.setView(this.view === "session" ? "arrangement" : "session");
+    } else if ((e.key === "Delete" || e.key === "Backspace") && this.selection.arr !== null) {
+      e.preventDefault();
+      this.deleteSelectedClip();
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d" && this.selection.arr !== null) {
+      e.preventDefault();
+      this.duplicateArrangementClip();
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
       e.preventDefault();
       if (e.shiftKey) this.redo();
@@ -514,9 +730,10 @@ export class App {
 
   private animate() {
     const beat = this.engine.currentBeat;
+    this.growOpenArrClips();
     const pos = document.getElementById("position");
     if (pos) {
-      const b = Math.max(0, beat);
+      const b = Math.max(0, this.engine.timelineBeat);
       const bar = Math.floor(b / 4) + 1;
       const beatInBar = Math.floor(b % 4) + 1;
       const six = Math.floor((b % 1) * 4) + 1;
@@ -540,7 +757,8 @@ export class App {
 
     this.project.tracks.forEach((_, i) => setMeter(`meter-${i}`, this.engine.level(i)));
     setMeter("meter-master", this.engine.level(-1));
-    this.editor.updatePlayhead(beat);
+    this.editor.updatePlayhead();
+    if (this.view === "arrangement") this.arrangement.update();
     requestAnimationFrame(() => this.animate());
   }
 }
@@ -574,3 +792,4 @@ function loadStoredProject(): Project | null {
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 const dbFormat = (v: number) => (v <= 0.0001 ? "-∞" : `${(20 * Math.log10(v)).toFixed(1)} dB`);
 const panFormat = (v: number) => (Math.abs(v) < 0.01 ? "C" : v < 0 ? `${Math.round(-v * 50)}L` : `${Math.round(v * 50)}R`);
+
