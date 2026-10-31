@@ -527,6 +527,27 @@ input:not([type]) {
   overflow: hidden;
   cursor: pointer;
 }
+.note.selected {
+  outline: 2px solid var(--text);
+  outline-offset: -1px;
+  z-index: 1;
+}
+.note::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+}
+.marquee {
+  position: absolute;
+  border: 1px dashed var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  pointer-events: none;
+  z-index: 2;
+}
 .note.chance {
   background-image: repeating-linear-gradient(135deg, rgba(0, 0, 0, 0.25) 0 3px, transparent 3px 6px) !important;
 }
@@ -1116,4 +1137,7 @@ input:not([type]) {
 }
 .arr-lane.muted .arr-clip {
   opacity: 0.45;
+}
+.roll-scroll {
+  user-select: none;
 }

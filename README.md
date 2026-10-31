@@ -84,9 +84,13 @@ Installer und hängt sie an einen Release-Entwurf.
 | Sample verwenden | Aus dem Browser in einen Slot oder in die Zeitleiste ziehen (leere Spuren werden zur Audiospur) |
 | Sample an Clip-Länge anpassen | „An Clip anpassen“ im Clip-Editor (setzt die Sample-BPM) |
 | Clip starten | ▶ im Clip oder ▶ Szene |
-| Note zeichnen | Klicken und nach rechts ziehen |
-| Note löschen | Klick auf die Note |
-| Wahrscheinlichkeit | Shift+Klick auf eine Note (100 → 75 → 50 → 25 %) |
+| Note zeichnen | In leeren Bereich klicken und nach rechts ziehen |
+| Noten auswählen | Klick, Shift+Klick ergänzt, Shift+Ziehen zieht einen Rahmen, Strg+A wählt alle |
+| Noten verschieben / Länge ändern | Ziehen / rechten Rand ziehen, oder Pfeiltasten (Shift: Takt bzw. Oktave, Alt+←/→: Länge) |
+| Noten kopieren | Strg+Ziehen, Strg+D dupliziert, Strg+C / Strg+X / Strg+V |
+| Note löschen | Doppelklick auf die Note oder Entf |
+| Wahrscheinlichkeit | Alt+Klick auf eine Note (100 → 75 → 50 → 25 %), oder Noten wählen und „Chance“ ziehen |
+| Velocity ändern | Noten wählen und „Vel“ ziehen |
 | Spur bouncen | „⤓“ im Spurkopf der Arrangement-Ansicht |
 | Als WAV exportieren | „Export“ oben rechts |
 | Rückgängig/Wiederholen | Strg+Z / Strg+Shift+Z |

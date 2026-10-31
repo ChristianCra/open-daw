@@ -1,7 +1,8 @@
 // Piano-roll clip editor with scale highlighting, fold-to-scale, note
-// velocity/probability and drag-to-draw.
+// velocity/probability, drawing, selection, moving, resizing and copying.
 
 import { BEATS_PER_BAR, DRUM_MAP, STEPS_PER_BEAT, pitchName, type Clip, type Note } from "../model";
+import { duplicateNotes, moveRows, notesInRect, pasteNotes, resizeNotes, shiftNotes, span, transpose } from "../midi/edit";
 import { getScale, inScale, isRoot } from "../music/scales";
 import type { App } from "./app";
 import { drawPeaks } from "./browser";
@@ -12,6 +13,8 @@ const STEP_W = 22;
 const SYNTH_TOP = 96;
 const SYNTH_BOTTOM = 24;
 const PROB_CYCLE = [1, 0.75, 0.5, 0.25];
+/** Pixels at a note's right edge that resize instead of move */
+const RESIZE_ZONE = 6;
 
 interface Row {
   pitch: number;
@@ -33,6 +36,17 @@ export class ClipEditor {
   private lastClipKey = "";
   /** Width of the audio waveform in beats (0 when the piano roll is shown) */
   private audioBeats = 0;
+  /** Selected notes of the current clip (note objects, so sorting doesn't break it) */
+  selected = new Set<Note>();
+  private clipboard: Note[] = [];
+  /** True after the user clicked into the editor: keyboard shortcuts edit notes */
+  active = false;
+  private boundHost: HTMLElement | null = null;
+  /** Note drawn by the last click, so a double-click right after doesn't delete it */
+  private justCreated: Note | null = null;
+  private lastNoteDown: { note: Note; time: number; x: number; y: number } | null = null;
+  /** One undo step per slider gesture on selected notes */
+  private sliderUndoArmed = true;
 
   constructor(private app: App) {}
 
@@ -59,7 +73,9 @@ export class ClipEditor {
     const clipKey = `${app.selection.track}:${app.selection.scene}:${app.selection.arr}:${track?.instrument}:${this.fold}`;
     if (oldScroller && clipKey === this.lastClipKey && !this.focusPending) this.scrollTop = oldScroller.scrollTop;
     else this.scrollTop = null;
+    if (clipKey !== this.lastClipKey) this.selected.clear();
     this.lastClipKey = clipKey;
+    this.bindHost(host);
 
     if (!track) {
       host.replaceChildren();
@@ -129,8 +145,30 @@ export class ClipEditor {
             "Fold",
           )
         : null,
-      slider({ label: "Vel", min: 0.05, max: 1, step: 0.05, value: this.newVelocity, format: (v) => String(Math.round(v * 127)), onInput: (v) => (this.newVelocity = v) }),
-      slider({ label: "Chance", min: 0.05, max: 1, step: 0.05, value: this.newProbability, format: (v) => `${Math.round(v * 100)}%`, onInput: (v) => (this.newProbability = v) }),
+      slider({
+        label: "Vel",
+        min: 0.05,
+        max: 1,
+        step: 0.05,
+        value: this.newVelocity,
+        format: (v) => String(Math.round(v * 127)),
+        onInput: (v) => {
+          this.newVelocity = v;
+          this.applyToSelection((n) => (n.velocity = v));
+        },
+      }),
+      slider({
+        label: "Chance",
+        min: 0.05,
+        max: 1,
+        step: 0.05,
+        value: this.newProbability,
+        format: (v) => `${Math.round(v * 100)}%`,
+        onInput: (v) => {
+          this.newProbability = v;
+          this.applyToSelection((n) => (n.probability = v));
+        },
+      }),
       h("span", { class: "spacer" }),
       h("button", { class: "btn small", title: "Als MIDI-Datei exportieren", onclick: () => app.exportSelectedClipMidi() }, "MIDI ↓"),
       h("button", { class: "btn small danger", title: "Clip löschen", onclick: () => app.deleteSelectedClip() }, "Löschen"),
@@ -187,6 +225,8 @@ export class ClipEditor {
     if (!clip || !this.notesLayer) return;
     const color = this.app.selectedTrack.color;
     const children: HTMLElement[] = [];
+    // Drop notes that no longer exist (undo, deletion elsewhere).
+    for (const n of this.selected) if (!clip.notes.includes(n)) this.selected.delete(n);
     clip.notes.forEach((n, i) => {
       const row = this.rows.findIndex((r) => r.pitch === n.pitch);
       if (row < 0) return; // hidden by fold or outside the drum map
@@ -195,7 +235,7 @@ export class ClipEditor {
         h(
           "div",
           {
-            class: `note ${prob < 1 ? "chance" : ""}`,
+            class: `note ${prob < 1 ? "chance" : ""} ${this.selected.has(n) ? "selected" : ""}`,
             "data-index": i,
             title: `${pitchName(n.pitch)} · Vel ${Math.round(n.velocity * 127)} · ${Math.round(prob * 100)}%`,
             style: {
@@ -211,7 +251,105 @@ export class ClipEditor {
         ),
       );
     });
-    this.notesLayer.replaceChildren(...children);
+    this.notesLayer.replaceChildren(...children, ...(this.marquee ? [this.marquee] : []));
+  }
+
+  private marquee: HTMLElement | null = null;
+
+  /** Tracks whether the editor has keyboard focus (last click was inside it). */
+  private bindHost(host: HTMLElement) {
+    if (this.boundHost === host) return;
+    this.boundHost = host;
+    document.addEventListener(
+      "pointerdown",
+      (e) => {
+        this.active = host.contains(e.target as Node);
+      },
+      true,
+    );
+  }
+
+  /** Applies a change to the selected notes (used by the Vel/Chance sliders). */
+  private applyToSelection(fn: (n: Note) => void) {
+    if (!this.selected.size || !this.app.selectedClip) return;
+    if (this.sliderUndoArmed) {
+      this.app.checkpoint();
+      this.sliderUndoArmed = false;
+      window.addEventListener("pointerup", () => (this.sliderUndoArmed = true), { once: true });
+    }
+    for (const n of this.selected) fn(n);
+    this.renderNotes();
+    this.app.changed(false);
+  }
+
+  private setSelection(notes: Iterable<Note>) {
+    this.selected = new Set(notes);
+    this.renderNotes();
+  }
+
+  /** Keyboard editing of the selected notes. Returns true when the key was handled. */
+  handleKey(e: KeyboardEvent): boolean {
+    const app = this.app;
+    const clip = app.selectedClip;
+    if (!this.active || !clip || clip.audio || !this.notesLayer) return false;
+    const mod = e.ctrlKey || e.metaKey;
+    const key = e.key.toLowerCase();
+    const sel = [...this.selected].filter((n) => clip.notes.includes(n));
+    const edit = (fn: () => void) => {
+      e.preventDefault();
+      app.checkpoint();
+      fn();
+      clip.notes.sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+      this.renderNotes();
+      app.changed(false);
+      return true;
+    };
+    if (mod && key === "a") {
+      e.preventDefault();
+      this.setSelection(clip.notes);
+      return true;
+    }
+    if (mod && key === "v" && this.clipboard.length) {
+      const at = sel.length ? span(sel)!.end : span(this.clipboard)!.start;
+      return edit(() => (this.selected = new Set(pasteNotes(clip.notes, this.clipboard, Math.min(at, clip.length - 0.25), clip.length))));
+    }
+    if (!sel.length) return false;
+    if (e.key === "Escape") {
+      this.setSelection([]);
+      return true;
+    }
+    if (mod && (key === "c" || key === "x")) {
+      e.preventDefault();
+      this.clipboard = sel.map((n) => ({ ...n }));
+      if (key === "x") return edit(() => ((clip.notes = clip.notes.filter((n) => !this.selected.has(n))), this.selected.clear()));
+      app.toast(`${sel.length} Note${sel.length === 1 ? "" : "n"} kopiert`);
+      return true;
+    }
+    if (mod && key === "d") return edit(() => (this.selected = new Set(duplicateNotes(clip.notes, sel, clip.length))));
+    if (mod) return false;
+    const rows = this.rows.map((r) => r.pitch);
+    const drums = app.selectedTrack.instrument === "drums";
+    switch (e.key) {
+      case "Delete":
+      case "Backspace":
+        return edit(() => ((clip.notes = clip.notes.filter((n) => !this.selected.has(n))), this.selected.clear()));
+      case "ArrowLeft":
+      case "ArrowRight": {
+        const dir = e.key === "ArrowLeft" ? -1 : 1;
+        if (e.altKey) return edit(() => resizeNotes(sel, (dir * 1) / STEPS_PER_BEAT, clip.length));
+        return edit(() => shiftNotes(sel, (dir * (e.shiftKey ? BEATS_PER_BAR : 1)) / (e.shiftKey ? 1 : STEPS_PER_BEAT), clip.length));
+      }
+      case "ArrowUp":
+      case "ArrowDown": {
+        const dir = e.key === "ArrowUp" ? 1 : -1;
+        return edit(() => {
+          if (e.shiftKey && !drums) transpose(sel, dir * 12);
+          else moveRows(sel, dir, rows);
+          if (sel.length === 1) app.engine.preview(app.selection.track, sel[0].pitch);
+        });
+      }
+    }
+    return false;
   }
 
   updatePlayhead() {
@@ -353,28 +491,143 @@ export class ClipEditor {
     canvas.addEventListener("pointerdown", (e) => {
       const clip = app.selectedClip;
       if (!clip || e.button !== 0) return;
+      e.preventDefault(); // no text selection while dragging (Shift+drag would extend it)
       const rect = canvas.getBoundingClientRect();
-      const step = Math.floor((e.clientX - rect.left) / STEP_W);
-      const rowIdx = Math.floor((e.clientY - rect.top) / ROW_H);
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const step = Math.floor(x / STEP_W);
+      const rowIdx = Math.floor(y / ROW_H);
       const row = this.rows[rowIdx];
       if (!row) return;
+      const pitches = this.rows.map((r) => r.pitch);
 
       const noteEl = (e.target as HTMLElement).closest<HTMLElement>(".note");
       if (noteEl) {
-        const idx = Number(noteEl.dataset.index);
-        app.checkpoint();
-        if (e.shiftKey) {
-          const n = clip.notes[idx];
-          const cur = PROB_CYCLE.findIndex((p) => Math.abs(p - (n.probability ?? 1)) < 0.01);
-          n.probability = PROB_CYCLE[(cur + 1) % PROB_CYCLE.length];
-        } else {
-          clip.notes.splice(idx, 1);
+        const note = clip.notes[Number(noteEl.dataset.index)];
+        if (!note) return;
+        if (e.altKey) {
+          // Alt+click cycles the probability.
+          app.checkpoint();
+          const cur = PROB_CYCLE.findIndex((p) => Math.abs(p - (note.probability ?? 1)) < 0.01);
+          note.probability = PROB_CYCLE[(cur + 1) % PROB_CYCLE.length];
+          this.renderNotes();
+          app.changed(false);
+          return;
         }
+        // Double-click deletes. Detected here because the notes are re-rendered
+        // between the clicks, which stops the browser's own dblclick event.
+        const now = performance.now();
+        const last = this.lastNoteDown;
+        this.lastNoteDown = { note, time: now, x: e.clientX, y: e.clientY };
+        const isDouble = last?.note === note && now - last.time < 350 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 5;
+        if (!e.shiftKey && isDouble && note !== this.justCreated) {
+          app.checkpoint();
+          clip.notes = clip.notes.filter((x) => x !== note);
+          this.selected.delete(note);
+          this.lastNoteDown = null;
+          this.renderNotes();
+          app.changed(false);
+          return;
+        }
+        if (e.shiftKey) {
+          if (this.selected.has(note)) this.selected.delete(note);
+          else this.selected.add(note);
+          this.renderNotes();
+          return;
+        }
+        const wasSelected = this.selected.has(note);
+        if (!wasSelected) this.selected = new Set([note]);
+        if (note !== this.justCreated) this.justCreated = null;
+        const resize = e.clientX > noteEl.getBoundingClientRect().right - RESIZE_ZONE;
+        const copy = e.ctrlKey || e.metaKey;
         this.renderNotes();
-        app.changed(false);
+        canvas.setPointerCapture(e.pointerId);
+
+        let moving: Note[] = [...this.selected];
+        let snapshot = new Map(moving.map((n) => [n, { start: n.start, pitch: n.pitch, length: n.length }]));
+        let started = false;
+        let lastPitch = note.pitch;
+        const move = (ev: PointerEvent) => {
+          const dx = ev.clientX - e.clientX;
+          const dy = ev.clientY - e.clientY;
+          if (!started) {
+            if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+            started = true;
+            app.checkpoint();
+            if (copy && !resize) {
+              // Ctrl/Cmd+drag: leave the originals and drag copies.
+              const s = span(moving)!;
+              moving = pasteNotes(clip.notes, moving, s.start, clip.length);
+              snapshot = new Map(moving.map((n) => [n, { start: n.start, pitch: n.pitch, length: n.length }]));
+              this.selected = new Set(moving);
+            }
+          }
+          for (const [n, o] of snapshot) Object.assign(n, o);
+          const dSteps = Math.round(dx / (ev.altKey ? STEP_W * 2 : STEP_W));
+          if (resize) {
+            resizeNotes(moving, dSteps / STEPS_PER_BEAT, clip.length);
+          } else {
+            shiftNotes(moving, dSteps / STEPS_PER_BEAT, clip.length);
+            moveRows(moving, -Math.round(dy / ROW_H), pitches);
+            const grabbed = copy ? moving[0] : note;
+            if (grabbed && grabbed.pitch !== lastPitch) {
+              lastPitch = grabbed.pitch;
+              app.engine.preview(app.selection.track, grabbed.pitch);
+            }
+          }
+          this.renderNotes();
+        };
+        const up = () => {
+          canvas.removeEventListener("pointermove", move);
+          canvas.removeEventListener("pointerup", up);
+          if (!started) {
+            // A plain click on a note of a multi-selection selects just that note.
+            if (wasSelected && this.selected.size > 1) this.selected = new Set([note]);
+            this.renderNotes();
+            return;
+          }
+          clip.notes.sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+          this.renderNotes();
+          app.changed(false);
+        };
+        canvas.addEventListener("pointermove", move);
+        canvas.addEventListener("pointerup", up);
         return;
       }
 
+      if (e.shiftKey) {
+        // Shift+drag on empty space: rectangle selection.
+        const base = new Set(this.selected);
+        const box = h("div", { class: "marquee" });
+        this.marquee = box;
+        canvas.setPointerCapture(e.pointerId);
+        const move = (ev: PointerEvent) => {
+          const x2 = Math.max(0, Math.min(rect.width, ev.clientX - rect.left));
+          const y2 = Math.max(0, Math.min(rect.height, ev.clientY - rect.top));
+          Object.assign(box.style, {
+            left: `${Math.min(x, x2)}px`,
+            top: `${Math.min(y, y2)}px`,
+            width: `${Math.abs(x2 - x)}px`,
+            height: `${Math.abs(y2 - y)}px`,
+          });
+          const beatsPerPx = 1 / (STEP_W * STEPS_PER_BEAT);
+          const hit = notesInRect(clip.notes, pitches, x * beatsPerPx, x2 * beatsPerPx, rowIdx, Math.floor(y2 / ROW_H));
+          this.selected = new Set([...base, ...hit]);
+          this.renderNotes();
+        };
+        const up = () => {
+          canvas.removeEventListener("pointermove", move);
+          canvas.removeEventListener("pointerup", up);
+          this.marquee = null;
+          this.renderNotes();
+        };
+        canvas.addEventListener("pointermove", move);
+        canvas.addEventListener("pointerup", up);
+        move(e);
+        return;
+      }
+
+      // Click on empty space: draw a new note, drag to set its length.
       app.checkpoint();
       const note: Note = {
         pitch: row.pitch,
@@ -384,6 +637,9 @@ export class ClipEditor {
         probability: this.newProbability,
       };
       clip.notes.push(note);
+      this.selected = new Set([note]);
+      this.justCreated = note;
+      window.setTimeout(() => this.justCreated === note && (this.justCreated = null), 500);
       app.engine.preview(app.selection.track, row.pitch);
       this.renderNotes();
       canvas.setPointerCapture(e.pointerId);

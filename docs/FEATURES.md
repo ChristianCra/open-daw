@@ -25,8 +25,8 @@ Legende: ✅ vorhanden · 🟡 teilweise · 🗺️ geplant · ⛔ nicht machbar
 | Transformationen: Rhythmus-Variationen | ✅ | Teilen, Weglassen, Verschieben |
 | Accelerando/Ritardando-Kurven | ✅ | Time Warp |
 | Weitere Transformationen | ✅ | Quantize, Humanize, Transpose in Scale, Legato |
-| Wahrscheinlichkeit pro Note | ✅ | Wird bei jedem Loop-Durchlauf neu gewürfelt, Werkzeug + Shift+Klick |
-| Piano-Roll mit erweiterten Werkzeugen | 🟡 | Zeichnen, Länge ziehen, Velocity, Chance, Fold. Geplant: Auswahl, Verschieben, Kopieren |
+| Wahrscheinlichkeit pro Note | ✅ | Wird bei jedem Loop-Durchlauf neu gewürfelt, Werkzeug + Alt+Klick |
+| Piano-Roll mit erweiterten Werkzeugen | ✅ | Zeichnen, Auswahl (Klick, Shift, Rahmen), Verschieben, Länge ziehen, Strg+Ziehen kopiert, Duplizieren, Kopieren/Einfügen, Tastatursteuerung, Velocity und Chance für die Auswahl, Fold. Geplant: Velocity-Lane, Zoom |
 | MPE | 🟡 | Pitchbend pro Kanal/Note live. Geplant: Slide/Pressure, Aufnahme von Ausdruck |
 | MIDI-Keyboard | ✅ | Web MIDI (Chrome/Edge): Geräteauswahl, Live-Spiel, Aufnahme mit Quantisierung |
 | MIDI-Datei-Export | ✅ | Pro Clip als .mid |

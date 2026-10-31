@@ -94,7 +94,7 @@ export class App {
       this.topbar,
       h("div", { class: "main-view" }, this.browserHost, h("div", { class: "views" }, this.session, this.arrangementHost)),
       h("div", { class: "lower" }, this.editorHost, h("div", { class: "side" }, this.deviceHost, this.toolsHost)),
-      h("footer", { class: "statusbar" }, "Space: Play/Stop · Tab: Session/Arrangement · Doppelklick: Clip anlegen · Clips aus dem Raster in die Zeitleiste ziehen · Entf: Clip löschen · Strg+D: duplizieren · Strg+Z: Rückgängig"),
+      h("footer", { class: "statusbar" }, "Space: Play/Stop · Tab: Session/Arrangement · Doppelklick: Clip anlegen · Clips aus dem Raster in die Zeitleiste ziehen · Piano-Roll: Shift+Ziehen wählt aus, Strg+Ziehen kopiert, Pfeiltasten verschieben · Strg+D: duplizieren · Strg+Z: Rückgängig"),
     );
     this.midi.onEvent = (ev) => this.onMidi(ev);
     this.midi.onDevicesChanged = () => this.renderTopbar();
@@ -843,6 +843,7 @@ export class App {
     const target = e.target as HTMLElement;
     const typing = target.tagName === "INPUT" && (target as HTMLInputElement).type !== "range";
     if (typing || target.tagName === "SELECT" || target.tagName === "TEXTAREA") return;
+    if (this.editor.handleKey(e)) return;
     if (this.arrangement.handleKey(e)) return;
     if (e.code === "Space") {
       e.preventDefault();
