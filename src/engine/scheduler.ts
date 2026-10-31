@@ -40,6 +40,12 @@ export function quantize(beat: number, quantum = BEATS_PER_BAR): number {
   return q < beat ? q + quantum : q;
 }
 
+/** MIDI notes of a clip, or for audio clips one trigger that starts the sample each loop. */
+export function clipEvents(clip: Clip): Note[] {
+  if (!clip.audio) return clip.notes;
+  return [{ pitch: 60, start: 0, length: clip.length, velocity: 1, audio: clip.audio }];
+}
+
 /**
  * Notes of a looping clip whose note-on falls in [from, to).
  * `clipStart` is the transport beat where the clip loop started.
@@ -51,9 +57,10 @@ export function clipNotesInWindow(clip: Clip, clipStart: number, from: number, t
   if (to <= lo) return out;
   const firstLoop = Math.floor((lo - clipStart) / clip.length);
   const lastLoop = Math.floor((to - clipStart) / clip.length);
+  const notes = clipEvents(clip);
   for (let k = firstLoop; k <= lastLoop; k++) {
     const loopStart = clipStart + k * clip.length;
-    for (const note of clip.notes) {
+    for (const note of notes) {
       if (note.start >= clip.length) continue;
       const beat = loopStart + note.start;
       if (beat >= lo && beat < to) out.push({ note, beat });
@@ -175,4 +182,30 @@ export function timelineSegments(from: number, to: number, playStart: number, lo
     cursor = segEnd;
   }
   return segs;
+}
+
+/**
+ * When playback starts (or the loop jumps) in the middle of an audio clip on
+ * the timeline, the sample must start part-way through. Returns that trigger
+ * for the arrangement clip covering timeline beat `tl`, if any.
+ */
+export function chaseAudio(trackIndex: number, clips: ArrangementClip[], tl: number): ScheduledNote | null {
+  for (const ac of clips) {
+    const clip = ac.clip;
+    if (!clip.audio || clip.length <= 0) continue;
+    const end = ac.start + ac.length;
+    if (tl < ac.start || tl >= end) continue;
+    const loopOrigin = ac.start - (ac.offset ?? 0);
+    const pos = (((tl - loopOrigin) % clip.length) + clip.length) % clip.length;
+    // Exactly on a loop start: the normal scheduler triggers it.
+    if (pos < 1e-6 || clip.length - pos < 1e-6) return null;
+    const length = Math.min(clip.length - pos, end - tl);
+    return {
+      track: trackIndex,
+      beat: tl,
+      length,
+      note: { pitch: 60, start: pos, length, velocity: 1, audio: clip.audio, sampleOffset: pos },
+    };
+  }
+  return null;
 }

@@ -1,9 +1,10 @@
 // Piano-roll clip editor with scale highlighting, fold-to-scale, note
 // velocity/probability and drag-to-draw.
 
-import { BEATS_PER_BAR, DRUM_MAP, STEPS_PER_BEAT, pitchName, type Note } from "../model";
+import { BEATS_PER_BAR, DRUM_MAP, STEPS_PER_BEAT, pitchName, type Clip, type Note } from "../model";
 import { getScale, inScale, isRoot } from "../music/scales";
 import type { App } from "./app";
+import { drawPeaks } from "./browser";
 import { h, select, slider } from "./dom";
 
 const ROW_H = 16;
@@ -30,6 +31,8 @@ export class ClipEditor {
   /** True until the initial "centre on the notes" scroll has actually happened */
   private focusPending = false;
   private lastClipKey = "";
+  /** Width of the audio waveform in beats (0 when the piano roll is shown) */
+  private audioBeats = 0;
 
   constructor(private app: App) {}
 
@@ -85,6 +88,12 @@ export class ClipEditor {
       this.playhead = null;
       return;
     }
+
+    if (clip.audio) {
+      this.renderAudio(host, clip);
+      return;
+    }
+    this.audioBeats = 0;
 
     this.rows = this.computeRows();
     const steps = Math.round(clip.length * STEPS_PER_BEAT);
@@ -213,7 +222,130 @@ export class ClipEditor {
       return;
     }
     this.playhead.style.display = "block";
-    this.playhead.style.transform = `translateX(${at.pos * STEPS_PER_BEAT * STEP_W}px)`;
+    if (this.audioBeats > 0) this.playhead.style.left = `${(at.pos / this.audioBeats) * 100}%`;
+    else this.playhead.style.transform = `translateX(${at.pos * STEPS_PER_BEAT * STEP_W}px)`;
+  }
+
+  /** Editor for audio clips: waveform, gain, tempo following and length. */
+  private renderAudio(host: HTMLElement, clip: Clip) {
+    const app = this.app;
+    const audio = clip.audio!;
+    const track = app.selectedTrack;
+    const meta = app.engine.samples.meta(audio.sampleId);
+    const bpm = app.project.bpm;
+    // Beats the sample lasts at the current tempo (re-pitched when sampleBpm is set).
+    const sampleBeats = meta ? (meta.duration * (audio.sampleBpm ?? bpm)) / 60 : 0;
+    this.audioBeats = clip.length;
+    this.notesLayer = null;
+
+    const name = h("input", {
+      class: "clip-name-input",
+      value: clip.name,
+      onchange: () => {
+        app.checkpoint();
+        clip.name = name.value;
+        app.changed();
+      },
+    });
+    const lengths = ["1", "2", "4", "8", "16"];
+    const bars = String(clip.length / BEATS_PER_BAR);
+    const lengthSel = select(
+      lengths.includes(bars) ? bars : "custom",
+      [...lengths.map((v) => ({ value: v, label: `${v} Takt${v === "1" ? "" : "e"}` })), ...(lengths.includes(bars) ? [] : [{ value: "custom", label: `${+(clip.length / BEATS_PER_BAR).toFixed(2)} Takte` }])],
+      (v) => {
+        if (v === "custom") return;
+        app.checkpoint();
+        clip.length = Number(v) * BEATS_PER_BAR;
+        app.changed();
+      },
+      "Clip-Länge",
+    );
+    const bpmInput = h("input", {
+      class: "num-input",
+      type: "number",
+      min: 20,
+      max: 400,
+      step: 0.01,
+      placeholder: "aus",
+      value: audio.sampleBpm ?? "",
+      title: "Original-Tempo des Samples. Gesetzt: das Sample folgt dem Projekttempo (Repitch). Leer: Originalgeschwindigkeit.",
+      onchange: () => {
+        const v = Number(bpmInput.value);
+        app.checkpoint();
+        audio.sampleBpm = bpmInput.value && v >= 20 && v <= 400 ? v : null;
+        app.changed();
+      },
+    });
+
+    const header = h(
+      "div",
+      { class: "panel-title editor-head" },
+      h("span", { class: "swatch", style: { background: track.color } }),
+      name,
+      lengthSel,
+      h(
+        "button",
+        {
+          class: "btn small",
+          title: "Clip-Länge auf die Sample-Länge setzen (auf 1/16 gerundet)",
+          disabled: !meta,
+          onclick: () => {
+            app.checkpoint();
+            clip.length = Math.max(0.25, Math.round(sampleBeats * 4) / 4);
+            app.changed();
+          },
+        },
+        "Sample-Länge",
+      ),
+      slider({
+        label: "Gain",
+        min: 0,
+        max: 2,
+        step: 0.01,
+        value: audio.gain,
+        format: (v) => (v <= 0 ? "-∞ dB" : `${(20 * Math.log10(v)).toFixed(1)} dB`),
+        onInput: (v) => {
+          audio.gain = v;
+          app.changed(false);
+        },
+      }),
+      h("label", { class: "check" }, "Sample-BPM ", bpmInput),
+      h(
+        "button",
+        {
+          class: "btn small",
+          title: "Sample-BPM so setzen, dass das Sample genau die Clip-Länge füllt",
+          disabled: !meta,
+          onclick: () => {
+            if (!meta) return;
+            app.checkpoint();
+            audio.sampleBpm = Math.round(((clip.length * 60) / meta.duration) * 100) / 100;
+            app.changed();
+          },
+        },
+        "An Clip anpassen",
+      ),
+      h("span", { class: "spacer" }),
+      h("button", { class: "btn small danger", title: "Clip löschen", onclick: () => app.deleteSelectedClip() }, "Löschen"),
+    );
+
+    const canvas = h("canvas", { width: 1200, height: 140 });
+    if (meta) drawPeaks(canvas, meta.peaks, track.color, 0, clip.length / Math.max(1e-6, sampleBeats));
+    this.playhead = h("div", { class: "playhead" });
+    const grid = h("div", { class: "audio-grid" });
+    for (let b = 1; b < clip.length; b++) {
+      grid.append(h("div", { class: `audio-beat ${b % BEATS_PER_BAR === 0 ? "bar" : ""}`, style: { left: `${(b / clip.length) * 100}%` } }));
+    }
+    const info = meta
+      ? `${meta.name} · ${meta.duration.toFixed(2)} s · ${meta.sampleRate} Hz · ${meta.channels === 1 ? "Mono" : "Stereo"} · ${
+          audio.sampleBpm ? `folgt dem Tempo (Rate ${(bpm / audio.sampleBpm).toFixed(3)}×)` : "Originalgeschwindigkeit"
+        } · Sample ${sampleBeats.toFixed(2)} Schläge, Clip ${clip.length} Schläge`
+      : "Das Sample fehlt in der Bibliothek. Importiere die Datei erneut, um den Clip abzuspielen.";
+    host.replaceChildren(
+      header,
+      h("div", { class: "audio-editor" }, h("div", { class: "audio-wave-wrap" }, canvas, grid, this.playhead), h("p", { class: "audio-info" }, info)),
+    );
+    this.updatePlayhead();
   }
 
   private attachPointer(canvas: HTMLElement) {

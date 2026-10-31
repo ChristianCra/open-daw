@@ -16,6 +16,24 @@ export interface Note {
   velocity: number;
   /** Chance 0..1 that the note plays on each loop pass (default 1) */
   probability?: number;
+  /** Internal: set on the trigger "note" of an audio clip */
+  audio?: AudioRegion;
+  /** Internal: where playback of an audio trigger starts inside the clip, in beats */
+  sampleOffset?: number;
+}
+
+/** Audio content of a clip on an audio track. */
+export interface AudioRegion {
+  /** Id of the sample in the sample library */
+  sampleId: string;
+  /** Linear gain 0..2 */
+  gain: number;
+  /**
+   * Original tempo of the sample. When set, the sample is re-pitched to follow
+   * the project tempo (playback rate = project BPM / sample BPM). Null plays at
+   * original speed.
+   */
+  sampleBpm: number | null;
 }
 
 export interface Clip {
@@ -23,9 +41,11 @@ export interface Clip {
   /** Loop length in beats */
   length: number;
   notes: Note[];
+  /** Present on audio clips */
+  audio?: AudioRegion;
 }
 
-export type InstrumentKind = "synth" | "drums";
+export type InstrumentKind = "synth" | "drums" | "audio";
 
 export type Waveform = "sine" | "triangle" | "sawtooth" | "square";
 
@@ -154,7 +174,7 @@ export const DRUM_MAP: { pitch: number; name: string }[] = [
 
 export function createTrack(index: number, instrument: InstrumentKind, sceneCount: number): Track {
   return {
-    name: instrument === "drums" ? `Drums ${index + 1}` : `Synth ${index + 1}`,
+    name: instrument === "drums" ? `Drums ${index + 1}` : instrument === "audio" ? `Audio ${index + 1}` : `Synth ${index + 1}`,
     color: TRACK_COLORS[index % TRACK_COLORS.length],
     instrument,
     synth: { ...DEFAULT_SYNTH },
@@ -246,7 +266,8 @@ export function parseProject(json: string): Project {
   if (!Array.isArray(data.tracks)) throw new Error("Project has no tracks");
   const sceneCount = typeof data.sceneCount === "number" ? data.sceneCount : 8;
   const tracks = data.tracks.map((t, i) => {
-    const base = createTrack(i, t.instrument === "drums" ? "drums" : "synth", sceneCount);
+    const kind: InstrumentKind = t.instrument === "drums" || t.instrument === "audio" ? t.instrument : "synth";
+    const base = createTrack(i, kind, sceneCount);
     const clips = Array.from({ length: sceneCount }, (_, s) => (t.clips?.[s] ? parseClip(t.clips[s]) : null));
     const arrangement = (Array.isArray(t.arrangement) ? t.arrangement : [])
       .filter((a) => a && a.clip)
@@ -305,7 +326,9 @@ function parseLoop(l: Partial<LoopRegion> | undefined): LoopRegion {
 }
 
 function parseClip(c: Partial<Clip>): Clip {
+  const audio = c.audio && typeof c.audio.sampleId === "string" ? parseAudio(c.audio) : undefined;
   return {
+    ...(audio ? { audio } : {}),
     name: String(c.name ?? "Clip"),
     length: Math.max(0.25, Number(c.length) || BEATS_PER_BAR),
     notes: (c.notes ?? []).map((n) => ({
@@ -318,8 +341,30 @@ function parseClip(c: Partial<Clip>): Clip {
   };
 }
 
+function parseAudio(a: Partial<AudioRegion>): AudioRegion {
+  const bpm = Number(a.sampleBpm);
+  return {
+    sampleId: String(a.sampleId),
+    gain: Math.min(2, Math.max(0, Number(a.gain ?? 1))),
+    sampleBpm: bpm >= 20 && bpm <= 999 ? bpm : null,
+  };
+}
+
 export function cloneClip(c: Clip): Clip {
-  return { name: c.name, length: c.length, notes: c.notes.map((n) => ({ ...n })) };
+  const copy: Clip = { name: c.name, length: c.length, notes: c.notes.map((n) => ({ ...n })) };
+  if (c.audio) copy.audio = { ...c.audio };
+  return copy;
+}
+
+/** Creates an audio clip for a sample of `durationSec` seconds at the given tempo. */
+export function createAudioClip(name: string, sampleId: string, durationSec: number, bpm: number): Clip {
+  const beats = (durationSec * bpm) / 60;
+  return {
+    name,
+    length: Math.max(0.25, Math.round(beats * 4) / 4),
+    notes: [],
+    audio: { sampleId, gain: 1, sampleBpm: null },
+  };
 }
 
 /** End of the last arrangement clip in beats (0 when the arrangement is empty). */

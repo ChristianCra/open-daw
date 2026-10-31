@@ -3,14 +3,16 @@
 // schedules all notes that fall into the next ~100 ms on the audio clock.
 
 import { BEATS_PER_BAR, type Project } from "../model";
+import { SampleLibrary } from "../audio/samples";
 import { automationParam, hasAutomation, pointsBetween, valueAt } from "../automation/automation";
-import type { AutomationParam } from "../model";
+import type { AudioRegion, AutomationParam } from "../model";
 import { getTuning } from "../music/tuning";
 import { DriveUnit } from "./drive";
 import { DrumKit, PolySynth, type Instrument, type Voice } from "./instruments";
 import {
   advanceTrack,
   arrangementNotesInWindow,
+  chaseAudio,
   emptyPlayState,
   linearToTimeline,
   quantize,
@@ -18,6 +20,9 @@ import {
   type ScheduledNote,
   type TrackPlayState,
 } from "./scheduler";
+
+/** Audio tracks have no instrument; their clips are played by the engine directly. */
+const SILENT: Instrument = { play() {}, noteOn: () => ({ release() {}, bend() {} }) };
 
 const LOOKAHEAD_SECONDS = 0.12;
 const TICK_MS = 25;
@@ -48,6 +53,7 @@ export class AudioEngine {
   /** Transport beat up to which notes have been scheduled */
   private scheduledUntil = 0;
   playStates: TrackPlayState[] = [];
+  readonly samples: SampleLibrary;
   /** Per track: true = plays the arrangement, false = overridden by the session grid */
   followArrangement: boolean[] = [];
   /** Timeline beat (on the bar grid) where playback starts */
@@ -60,6 +66,7 @@ export class AudioEngine {
 
   constructor(public project: Project) {
     this.ctx = new AudioContext({ latencyHint: "interactive" });
+    this.samples = new SampleLibrary(this.ctx);
     this.master = this.ctx.createGain();
     this.masterMeter = this.ctx.createAnalyser();
     this.masterMeter.fftSize = 512;
@@ -117,7 +124,9 @@ export class AudioEngine {
   }
 
   private makeInstrument(i: number, out: AudioNode): Instrument {
-    return this.project.tracks[i].instrument === "drums"
+    const kind = this.project.tracks[i].instrument;
+    if (kind === "audio") return SILENT;
+    return kind === "drums"
       ? new DrumKit(this.ctx, out)
       : new PolySynth(
           this.ctx,
@@ -282,6 +291,15 @@ export class AudioEngine {
       st.playing = null;
       st.queued = null;
     }
+    // Long samples would keep ringing after stop.
+    for (const src of this.activeSources) {
+      try {
+        src.stop();
+      } catch {
+        /* already stopped */
+      }
+    }
+    this.activeSources.clear();
     // Return automated parameters to their fader values.
     for (const ch of this.channels) {
       for (const param of [ch.volume.gain, ch.pan.pan, ch.delaySend.gain]) param.cancelScheduledValues(this.ctx.currentTime);
@@ -378,8 +396,18 @@ export class AudioEngine {
       }
     });
     // Arrangement playback, split where the loop region wraps around.
+    let jumped = from === 0; // playback just started
     for (const seg of timelineSegments(from, horizon, this.playStart, this.project.loop)) {
       const tlTo = seg.tlFrom + (seg.linTo - seg.linFrom);
+      if (jumped) {
+        // Start audio clips that are already running at this point part-way through.
+        this.project.tracks.forEach((tr, i) => {
+          if (!this.followArrangement[i] || this.playStates[i].playing) return;
+          const chase = chaseAudio(i, tr.arrangement, seg.tlFrom);
+          if (chase) notes.push({ ...chase, beat: seg.linFrom, length: this.clampToLoop(seg.tlFrom, chase.length), tlBeat: seg.tlFrom });
+        });
+      }
+      jumped = seg.wraps;
       this.project.tracks.forEach((tr, i) => {
         if (!this.followArrangement[i] || this.playStates[i].playing) return;
         const t0 = Math.max(this.ctx.currentTime, this.beatToTime(seg.linFrom));
@@ -387,7 +415,7 @@ export class AudioEngine {
         this.scheduleAutomation(i, seg.tlFrom, tlTo, t0, t1);
         for (const n of arrangementNotesInWindow(i, tr.arrangement, seg.tlFrom, tlTo)) {
           const linBeat = seg.linFrom + (n.beat - seg.tlFrom);
-          const length = seg.wraps ? Math.min(n.length, seg.linTo - linBeat) : n.length;
+          const length = this.clampToLoop(n.beat, n.length);
           notes.push({ ...n, beat: linBeat, length, tlBeat: n.beat });
         }
       });
@@ -396,6 +424,10 @@ export class AudioEngine {
       // Per-note probability is rolled each time the note comes around.
       if (Math.random() >= (n.note.probability ?? 1)) continue;
       const time = Math.max(this.ctx.currentTime, this.beatToTime(n.beat));
+      if (n.note.audio) {
+        this.playSample(n.track, n.note.audio, time, n.length, n.note.sampleOffset ?? 0);
+        continue;
+      }
       const cutoff = n.tlBeat !== undefined ? valueAt(this.project.tracks[n.track]?.automation.cutoff, n.tlBeat) : null;
       this.cutoffOverride[n.track] = cutoff === null ? null : automationParam("cutoff").fromNorm(cutoff);
       this.channels[n.track]?.instrument.play(n.note.pitch, n.note.velocity, time, n.length * this.secondsPerBeat);
@@ -403,6 +435,64 @@ export class AudioEngine {
     }
     this.scheduledUntil = horizon;
   }
+
+  /** Cuts a note that starts at timeline beat `tl` so it doesn't ring past the loop end. */
+  private clampToLoop(tl: number, length: number): number {
+    const loop = this.project.loop;
+    if (!loop.enabled || this.playStart >= loop.end || tl >= loop.end) return length;
+    return Math.min(length, loop.end - tl);
+  }
+
+  /** Plays (part of) an audio clip's sample on a track. Lengths/offsets in beats. */
+  private playSample(track: number, audio: AudioRegion, time: number, lengthBeats: number, offsetBeats: number) {
+    const ch = this.channels[track];
+    const buffer = this.samples.buffer(audio.sampleId);
+    if (!ch) return;
+    if (!buffer) {
+      void this.samples.load(audio.sampleId); // ready for the next loop pass
+      return;
+    }
+    const rate = audio.sampleBpm ? this.project.bpm / audio.sampleBpm : 1;
+    const offsetSec = offsetBeats * this.secondsPerBeat * rate;
+    if (offsetSec >= buffer.duration) return;
+    const duration = lengthBeats * this.secondsPerBeat;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+    src.playbackRate.value = rate;
+    const gain = this.ctx.createGain();
+    // Short fades avoid clicks at cut points.
+    const end = time + duration;
+    gain.gain.setValueAtTime(0, time);
+    gain.gain.linearRampToValueAtTime(audio.gain, time + 0.003);
+    gain.gain.setValueAtTime(audio.gain, Math.max(time + 0.003, end - 0.005));
+    gain.gain.linearRampToValueAtTime(0, end);
+    src.connect(gain).connect(ch.input);
+    src.start(time, offsetSec);
+    src.stop(end + 0.01);
+    src.onended = () => gain.disconnect();
+    this.activeSources.add(src);
+    src.addEventListener("ended", () => this.activeSources.delete(src));
+  }
+
+  private activeSources = new Set<AudioBufferSourceNode>();
+
+  /** Auditions a sample from the library (null stops the preview). */
+  previewSample(id: string | null) {
+    this.previewSource?.stop();
+    this.previewSource = null;
+    if (!id) return;
+    void this.ctx.resume();
+    void this.samples.load(id).then((buf) => {
+      if (!buf) return;
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(this.master);
+      src.start();
+      this.previewSource = src;
+    });
+  }
+
+  private previewSource: AudioBufferSourceNode | null = null;
 
   /** Peak level 0..1 of a track (or master when track is -1). */
   level(track: number): number {

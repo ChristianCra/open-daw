@@ -7,9 +7,11 @@ Legende: ✅ vorhanden · 🟡 teilweise · 🗺️ geplant · ⛔ nicht machbar
 
 | Feature | Status | Notiz |
 | --- | --- | --- |
-| Stem-Trennung (Vocals, Drums, Bass, Rest) | 🗺️ | Braucht Audiospuren. Plan: offenes Modell (z. B. Demucs, MIT) per ONNX Runtime Web/nativ |
+| Stem-Trennung (Vocals, Drums, Bass, Rest) | 🗺️ | Audiospuren sind da. Plan: offenes Modell (z. B. Demucs, MIT) per ONNX Runtime Web/nativ |
 | Ähnliche Samples finden | 🗺️ | Audio-Features (MFCC/Spektrum) lokal berechnen, Nächste-Nachbarn-Suche |
 | Splice-Integration | ⛔ | Proprietärer Dienst ohne offene API. Stattdessen: eigene Sample-Ordner, später offene Quellen (z. B. Freesound-API) |
+| Audiospuren und Sample-Import | ✅ | WAV/MP3/OGG/FLAC importieren, Audio-Clips in Session und Arrangement, Gain, Repitch auf Projekttempo, Start mitten im Clip |
+| Time-Stretching ohne Tonhöhenänderung | 🗺️ | Bisher folgt das Sample dem Tempo per Repitch (wie Bandgeschwindigkeit) |
 | Audio zwischen Apps im Netzwerk | 🗺️ | Tempo-Sync über das offene Ableton-Link-SDK (GPL) in der Desktop-Version. Audio-Streaming später |
 
 ## MIDI & Komposition
@@ -44,7 +46,7 @@ Legende: ✅ vorhanden · 🟡 teilweise · 🗺️ geplant · ⛔ nicht machbar
 | Synth | ✅ | Subtraktiv, ADSR, Filter-Hüllkurve. Geplant: 2 Oszillatoren, Modulation, Wavetable |
 | Drum-Kit | ✅ | Komplett synthetisiert |
 | MPE-fähiger Experimental-Synth | 🗺️ | Eigenes Design, kein Nachbau eines bestimmten Geräts |
-| Granular-Instrument | 🗺️ | Braucht Sample-Import |
+| Granular-Instrument | 🗺️ | Kann auf der Sample-Bibliothek aufbauen |
 | Multiband-Sättigung | ✅ | „Drive“: 3 Bänder, Soft/Hard/Wavefold, Mix |
 | Delay | ✅ | Tempo-synchroner Send |
 | Plug-ins (VST3/CLAP) | 🗺️ | Nur in der Desktop-Version möglich |
@@ -53,7 +55,7 @@ Legende: ✅ vorhanden · 🟡 teilweise · 🗺️ geplant · ⛔ nicht machbar
 
 | Feature | Status | Notiz |
 | --- | --- | --- |
-| Browser mit Tags, Filtern, eigenen Kategorien | 🗺️ | Zusammen mit Sample-Import |
+| Browser mit Tags, Filtern, eigenen Kategorien | ✅ | Sample-Browser: Suche, Tag-Filter, Favoriten, Tags bearbeiten, Vorhören. Tags werden aus dem Dateinamen vorgeschlagen. Gespeichert in IndexedDB |
 | Ähnliche Dateien anzeigen | 🗺️ | Siehe „Ähnliche Samples finden“ |
 | Undo/Redo | ✅ | |
 | Speichern/Laden | ✅ | JSON-Projektdatei + automatisches Zwischenspeichern |
@@ -65,7 +67,7 @@ Legende: ✅ vorhanden · 🟡 teilweise · 🗺️ geplant · ⛔ nicht machbar
 | Clip-Raster + Mixer + Geräte + Editor gleichzeitig | ✅ | Alles in einem Fenster |
 | Arrangement-Zeitleiste | ✅ | Clips ziehen/verschieben/kürzen, Loop-Bereich, Session-Jam aufnehmen, „Zurück zum Arrangement“ |
 | Automation mit Tastatursteuerung | ✅ | Lautstärke, Pan, Delay-Send, Filter-Cutoff, Drive-Mix. Punkte per Maus oder Pfeiltasten (Shift grob, Alt fein) |
-| Bounce auf neue Spur | 🗺️ | Braucht Audiospuren + Offline-Rendering |
+| Bounce auf neue Spur | 🗺️ | Audiospuren sind da, fehlt noch Offline-Rendering (nächster Schritt) |
 
 ## Erweiterbarkeit
 

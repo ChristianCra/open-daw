@@ -46,7 +46,14 @@ export function renderDevicePanel(app: App, host: HTMLElement) {
           }),
           slider({ label: "Reso", min: 0.1, max: 20, step: 0.1, value: s.resonance, onInput: (v) => ((s.resonance = v), live()) }),
         )
-      : h("div", { class: "device" }, h("div", { class: "device-title" }, "Drum Kit"), h("p", { class: "hint" }, "Synthetisierte Kick, Snare, Clap und Hi-Hats. Keine Samples nötig."));
+      : track.instrument === "audio"
+        ? h(
+            "div",
+            { class: "device" },
+            h("div", { class: "device-title" }, "Audiospur"),
+            h("p", { class: "hint" }, "Spielt Samples aus der Bibliothek. Zieh Samples aus dem Browser in einen Slot oder in die Zeitleiste. Gain und Tempo stellst du im Clip-Editor ein."),
+          )
+        : h("div", { class: "device" }, h("div", { class: "device-title" }, "Drum Kit"), h("p", { class: "hint" }, "Synthetisierte Kick, Snare, Clap und Hi-Hats. Keine Samples nötig."));
 
   const drive = h(
     "div",
@@ -81,7 +88,9 @@ export function renderToolsPanel(app: App, host: HTMLElement) {
   const tools = midiTools();
   const tool = tools.find((t) => t.id === state.toolId) ?? tools[0];
   const params: ParamValues = { ...defaultParams(tool), ...state.params };
-  const clip = app.selectedClip;
+  const selected = app.selectedClip;
+  // MIDI tools only work on MIDI clips.
+  const clip = selected && !selected.audio ? selected : null;
 
   const controls = tool.params.map((p) =>
     p.type === "number"
@@ -141,7 +150,7 @@ export function renderToolsPanel(app: App, host: HTMLElement) {
             ]
           : h("button", { class: "btn primary", disabled: !clip, onclick: () => run(false) }, "Anwenden"),
       ),
-      clip ? null : h("p", { class: "hint" }, "Wähle einen Clip aus, um ihn zu bearbeiten."),
+      clip ? null : h("p", { class: "hint" }, selected?.audio ? "MIDI Tools gelten nur für MIDI-Clips." : "Wähle einen Clip aus, um ihn zu bearbeiten."),
     ),
   );
 }
