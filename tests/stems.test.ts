@@ -1,3 +1,4 @@
+import { formatDuration } from "../src/audio/stem-separator";
 import { describe, expect, it } from "vitest";
 import { chunkInput, makeWindow, OverlapAdd, planChunks } from "../src/audio/stems";
 
@@ -41,5 +42,14 @@ describe("stem separation chunking", () => {
       expect(s0[1][i]).toBeCloseTo(right[i], 5);
       expect(s1[0][i]).toBeCloseTo(left[i] * 0.5, 5);
     }
+  });
+});
+
+describe("formatDuration", () => {
+  it("formats seconds, minutes and hours", () => {
+    expect(formatDuration(0.2)).toBe("1 s");
+    expect(formatDuration(44.6)).toBe("45 s");
+    expect(formatDuration(150)).toBe("3 min");
+    expect(formatDuration(3900)).toBe("1 h 5 min");
   });
 });

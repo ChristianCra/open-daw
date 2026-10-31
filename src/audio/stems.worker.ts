@@ -22,6 +22,11 @@ export type WorkerResponse =
   | { type: "error"; message: string };
 
 let session: ort.InferenceSession | null = null;
+
+// Graph optimizations must stay off: on HT-Demucs, ORT's constant folding
+// runs out of WebAssembly memory (4 GB) and dies with "Aborted()" or
+// std::bad_alloc. Without them the session starts and runs normally.
+const SESSION_OPTIONS = { graphOptimizationLevel: "disabled" } as const;
 const post = (msg: WorkerResponse, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(msg, transfer);
 
 async function createSession(model: ArrayBuffer, backend: Backend): Promise<string> {
@@ -30,10 +35,10 @@ async function createSession(model: ArrayBuffer, backend: Backend): Promise<stri
     const gpu = (navigator as unknown as { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
     const adapter = gpu ? await gpu.requestAdapter().catch(() => null) : null;
     if (!adapter) throw new Error("Keine WebGPU-Grafikkarte verfügbar");
-    session = await ort.InferenceSession.create(new Uint8Array(model), { executionProviders: ["webgpu"] });
+    session = await ort.InferenceSession.create(new Uint8Array(model), { ...SESSION_OPTIONS, executionProviders: ["webgpu"] });
     return "WebGPU";
   }
-  session = await ort.InferenceSession.create(new Uint8Array(model), { executionProviders: ["wasm"] });
+  session = await ort.InferenceSession.create(new Uint8Array(model), { ...SESSION_OPTIONS, executionProviders: ["wasm"] });
   return "WebAssembly";
 }
 

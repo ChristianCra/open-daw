@@ -127,7 +127,7 @@ export async function openStemDialog(app: App, target: StemTarget) {
           cached
             ? "Das Modell ist schon geladen."
             : "Beim ersten Mal wird das Modell einmalig heruntergeladen (etwa 166 MB) und danach im Browser gespeichert.",
-          " Die Trennung dauert je nach Rechner einige Sekunden bis Minuten pro Minute Audio. Mit Grafikkarte (WebGPU, z. B. in Chrome oder Edge) geht es deutlich schneller.",
+          " Ohne Grafikkarte dauert die Trennung etwa drei- bis fünfmal so lange wie das Audio selbst (ein 5-Minuten-Song also 15 bis 25 Minuten). Mit Grafikkarte (WebGPU) geht es deutlich schneller. Zum Ausprobieren eignet sich ein kurzes Sample.",
         ),
         target.clip ? h("p", { class: "hint" }, "Die Stems landen auf vier neuen Spuren unter der aktuellen, die Originalspur wird stummgeschaltet.") : null,
         progress,
