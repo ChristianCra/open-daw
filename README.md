@@ -46,27 +46,46 @@ npm run build   # Produktions-Build nach dist/
 
 **Variante A: Installer (empfohlen).** Unter [Releases](https://github.com/ChristianCra/open-daw/releases)
 die Datei `open-daw_x.y.z_x64-setup.exe` (oder die `.msi`) herunterladen und ausführen.
-Zwischenstände ohne Release liegen als Artefakt „open-daw-windows-installer“ im Workflow
-[Windows installer](https://github.com/ChristianCra/open-daw/actions/workflows/windows.yml).
 Die Installer sind noch nicht signiert, deshalb zeigt Windows SmartScreen beim ersten Start eine
 Warnung („Weitere Informationen“ → „Trotzdem ausführen“).
 
 **Variante B: Als Web-App.** Die App in Microsoft Edge oder Google Chrome öffnen und in der
 Adressleiste auf **„App installieren“** klicken. Sie läuft danach in einem eigenen Fenster, auch offline.
+Die Web-Version liegt auf GitHub Pages, sobald Pages eingeschaltet ist
+(Repository → Settings → Pages → Source: **GitHub Actions**).
 
-### Installer selbst bauen
+### Ein Release erstellen (ohne eigene Build-Tools)
 
-Voraussetzungen unter Windows: Node.js 20+, [Rust](https://rustup.rs) und die
-„Desktop development with C++“-Build-Tools von Visual Studio.
+Den Installer baut GitHub Actions, auf dem eigenen Rechner muss dafür nichts installiert sein.
+Es gibt zwei Wege:
 
-```bash
+- **Über Actions (einfachster Weg):** Auf der Seite
+  [Windows installer](https://github.com/ChristianCra/open-daw/actions/workflows/windows.yml)
+  auf **„Run workflow“** klicken, bei **„Release-Tag“** zum Beispiel `v0.1.0` eintragen und starten.
+- **Über Releases:** Auf der [Releases-Seite](https://github.com/ChristianCra/open-daw/releases) auf
+  **„Draft a new release“** klicken, unter **„Choose a tag“** einen neuen Tag wie `v0.1.0` eintippen
+  („Create new tag on publish“) und veröffentlichen.
+
+Nach etwa 15 Minuten hängen die `.exe` und die `.msi` am Release. Den Fortschritt siehst du unter
+[Actions](https://github.com/ChristianCra/open-daw/actions). Ohne Tag gestartete Läufe legen den
+Installer nur als Artefakt „open-daw-windows-installer“ am jeweiligen Lauf ab.
+
+### Installer selbst bauen (für Entwickler)
+
+Voraussetzungen unter Windows: [Git](https://git-scm.com/download/win), [Node.js](https://nodejs.org) 20+,
+[Rust](https://rustup.rs) und die „Desktop development with C++“-Build-Tools von
+[Visual Studio](https://visualstudio.microsoft.com/de/visual-cpp-build-tools/).
+
+Die Befehle müssen **im Projektordner** laufen, nicht im Benutzerordner. Sonst meldet npm
+`Could not read package.json`. In PowerShell:
+
+```powershell
+git clone https://github.com/ChristianCra/open-daw.git
+cd open-daw
 npm install
-npm run tauri build   # Ergebnis: src-tauri/target/release/bundle/{nsis,msi}/
+npm run tauri build   # Ergebnis: src-tauri\target\release\bundle\nsis\ und ...\msi\
 npm run tauri dev     # Desktop-Fenster mit Live-Reload
 ```
-
-Ein neues Release entsteht, wenn ein Tag wie `v0.1.0` gepusht wird: GitHub Actions baut dann die
-Installer und hängt sie an einen Release-Entwurf.
 
 ## Bedienung
 
