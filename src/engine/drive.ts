@@ -70,10 +70,24 @@ export class DriveUnit {
     }
   }
 
-  update(p: DriveParams, time: number) {
+  /** Automation: ramp the dry/wet mix from `from` at t0 to `to` at t1. */
+  rampMix(from: number, to: number, t0: number, t1: number) {
+    for (const [param, a, b] of [
+      [this.dry.gain, 1 - from, 1 - to],
+      [this.wet.gain, from, to],
+    ] as const) {
+      param.cancelScheduledValues(t0);
+      param.setValueAtTime(a, t0);
+      param.linearRampToValueAtTime(b, t1);
+    }
+  }
+
+  update(p: DriveParams, time: number, skipMix = false) {
     const mix = p.enabled ? p.mix : 0;
-    this.dry.gain.setTargetAtTime(1 - mix, time, 0.01);
-    this.wet.gain.setTargetAtTime(mix, time, 0.01);
+    if (!skipMix) {
+      this.dry.gain.setTargetAtTime(1 - mix, time, 0.01);
+      this.wet.gain.setTargetAtTime(mix, time, 0.01);
+    }
     const key = JSON.stringify([p.shape, p.low, p.mid, p.high]);
     if (key === this.last) return;
     this.last = key;

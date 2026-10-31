@@ -86,6 +86,17 @@ export interface Track {
   clips: (Clip | null)[];
   /** Clips placed on the arrangement timeline, sorted by start */
   arrangement: ArrangementClip[];
+  /** Automation envelopes on the arrangement timeline, keyed by parameter id */
+  automation: Partial<Record<AutomationParam, AutomationPoint[]>>;
+}
+
+export type AutomationParam = "volume" | "pan" | "delay" | "cutoff" | "driveMix";
+
+export interface AutomationPoint {
+  /** Timeline position in beats */
+  beat: number;
+  /** Normalised value 0..1 (see AUTOMATION_PARAMS for the mapping) */
+  value: number;
 }
 
 /** A clip placed on the arrangement timeline. The clip loops to fill `length`. */
@@ -154,6 +165,7 @@ export function createTrack(index: number, instrument: InstrumentKind, sceneCoun
     fx: { delay: 0, drive: { ...DEFAULT_DRIVE } },
     clips: Array.from({ length: sceneCount }, () => null),
     arrangement: [],
+    automation: {},
   };
 }
 
@@ -252,6 +264,7 @@ export function parseProject(json: string): Project {
       fx: { ...base.fx, ...t.fx, drive: { ...base.fx.drive, ...t.fx?.drive } },
       clips,
       arrangement,
+      automation: parseAutomation(t.automation),
     };
   });
   return {
@@ -268,6 +281,21 @@ export function parseProject(json: string): Project {
     loop: parseLoop(data.loop),
     tracks,
   };
+}
+
+const AUTOMATION_IDS: AutomationParam[] = ["volume", "pan", "delay", "cutoff", "driveMix"];
+
+function parseAutomation(a: unknown): Track["automation"] {
+  const out: Track["automation"] = {};
+  if (!a || typeof a !== "object") return out;
+  for (const id of AUTOMATION_IDS) {
+    const pts = (a as Record<string, unknown>)[id];
+    if (!Array.isArray(pts)) continue;
+    out[id] = pts
+      .map((p: Partial<AutomationPoint>) => ({ beat: Math.max(0, Number(p?.beat) || 0), value: clamp01(p?.value ?? 0) }))
+      .sort((x, y) => x.beat - y.beat);
+  }
+  return out;
 }
 
 function parseLoop(l: Partial<LoopRegion> | undefined): LoopRegion {

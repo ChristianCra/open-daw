@@ -3,7 +3,9 @@ import { App } from "./ui/app";
 
 const root = document.getElementById("app");
 if (!root) throw new Error("#app missing");
-new App(root);
+const app = new App(root);
+// Handy for debugging and scripting from the browser console.
+(window as unknown as { openDaw: App }).openDaw = app;
 
 // Offline support / "Install app" in Chrome and Edge.
 // The desktop build (Tauri) ships its files locally, so it needs no service worker.

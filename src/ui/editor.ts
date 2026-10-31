@@ -27,6 +27,8 @@ export class ClipEditor {
   private playhead: HTMLElement | null = null;
   private rows: Row[] = [];
   private scrollTop: number | null = null;
+  /** True until the initial "centre on the notes" scroll has actually happened */
+  private focusPending = false;
   private lastClipKey = "";
 
   constructor(private app: App) {}
@@ -52,7 +54,7 @@ export class ClipEditor {
     const track = app.selectedTrack;
     const oldScroller = host.querySelector<HTMLElement>(".roll-scroll");
     const clipKey = `${app.selection.track}:${app.selection.scene}:${app.selection.arr}:${track?.instrument}:${this.fold}`;
-    if (oldScroller && clipKey === this.lastClipKey) this.scrollTop = oldScroller.scrollTop;
+    if (oldScroller && clipKey === this.lastClipKey && !this.focusPending) this.scrollTop = oldScroller.scrollTop;
     else this.scrollTop = null;
     this.lastClipKey = clipKey;
 
@@ -162,7 +164,12 @@ export class ClipEditor {
       // Centre the view around middle C (or the first note of the clip).
       const focus = clip.notes[0]?.pitch ?? 60;
       const idx = this.rows.findIndex((r) => r.pitch <= focus);
-      requestAnimationFrame(() => (scroller.scrollTop = Math.max(0, idx * ROW_H - scroller.clientHeight / 2)));
+      this.focusPending = true;
+      requestAnimationFrame(() => {
+        if (!scroller.isConnected) return;
+        scroller.scrollTop = Math.max(0, idx * ROW_H - scroller.clientHeight / 2);
+        this.focusPending = false;
+      });
     }
   }
 
