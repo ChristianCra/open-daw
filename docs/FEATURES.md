@@ -80,4 +80,4 @@ Legende: ✅ vorhanden · 🟡 teilweise · 🗺️ geplant · ⛔ nicht machbar
 | --- | --- | --- |
 | Browser | ✅ | Chrome/Edge empfohlen (Web MIDI) |
 | Windows-App (PWA) | ✅ | In Edge/Chrome „App installieren“ |
-| Windows-Installer (.msi/.exe) | 🗺️ | Tauri, eigener PR |
+| Windows-Installer (.msi/.exe) | ✅ | Tauri, gebaut von GitHub Actions (noch unsigniert) |
