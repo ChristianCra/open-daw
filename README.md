@@ -19,7 +19,7 @@ kein UI-Design anderer DAWs. Mehr dazu in [docs/REVERSE-ENGINEERING.md](docs/REV
 - **Mixer** mit Pegelanzeige, Pan, Mute, Solo
 - **MIDI-Keyboards** über Web MIDI: live spielen, aufnehmen, Pitchbend/MPE
 - Undo/Redo, Speichern/Öffnen als JSON, Export einzelner Clips als MIDI-Datei
-- Installierbar als App (PWA), läuft offline
+- Windows-Installer (.exe/.msi) über Tauri, außerdem installierbar als Web-App (PWA)
 
 Vollständige Liste und Roadmap: [docs/FEATURES.md](docs/FEATURES.md).
 
@@ -36,12 +36,29 @@ npm run build   # Produktions-Build nach dist/
 
 ## Unter Windows installieren
 
-1. Die App in **Microsoft Edge** oder **Google Chrome** öffnen (lokal mit `npm run build && npm run preview`
-   oder über die GitHub-Pages-Adresse, sobald Pages aktiviert ist).
-2. In der Adressleiste auf das Symbol **„App installieren“** klicken.
-3. open-daw erscheint danach im Startmenü und läuft in einem eigenen Fenster, auch offline.
+**Variante A: Installer (empfohlen).** Unter [Releases](https://github.com/ChristianCra/open-daw/releases)
+die Datei `open-daw_x.y.z_x64-setup.exe` (oder die `.msi`) herunterladen und ausführen.
+Zwischenstände ohne Release liegen als Artefakt „open-daw-windows-installer“ im Workflow
+[Windows installer](https://github.com/ChristianCra/open-daw/actions/workflows/windows.yml).
+Die Installer sind noch nicht signiert, deshalb zeigt Windows SmartScreen beim ersten Start eine
+Warnung („Weitere Informationen“ → „Trotzdem ausführen“).
 
-Ein klassischer Windows-Installer (.msi/.exe) auf Basis von Tauri ist in Arbeit.
+**Variante B: Als Web-App.** Die App in Microsoft Edge oder Google Chrome öffnen und in der
+Adressleiste auf **„App installieren“** klicken. Sie läuft danach in einem eigenen Fenster, auch offline.
+
+### Installer selbst bauen
+
+Voraussetzungen unter Windows: Node.js 20+, [Rust](https://rustup.rs) und die
+„Desktop development with C++“-Build-Tools von Visual Studio.
+
+```bash
+npm install
+npm run tauri build   # Ergebnis: src-tauri/target/release/bundle/{nsis,msi}/
+npm run tauri dev     # Desktop-Fenster mit Live-Reload
+```
+
+Ein neues Release entsteht, wenn ein Tag wie `v0.1.0` gepusht wird: GitHub Actions baut dann die
+Installer und hängt sie an einen Release-Entwurf.
 
 ## Bedienung
 
@@ -65,6 +82,7 @@ src/
   music/               Skalen und Stimmungssysteme
   midi/                MIDI Tools (Generatoren/Transformationen), MIDI-Datei-Export
   ui/                  Oberfläche (ohne Framework)
+src-tauri/             Desktop-Hülle (Tauri) für den Windows-Installer
 tests/                 Vitest-Unit-Tests
 ```
 
