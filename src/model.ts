@@ -84,6 +84,26 @@ export interface Track {
   fx: TrackFx;
   /** One slot per scene; null = empty slot */
   clips: (Clip | null)[];
+  /** Clips placed on the arrangement timeline, sorted by start */
+  arrangement: ArrangementClip[];
+}
+
+/** A clip placed on the arrangement timeline. The clip loops to fill `length`. */
+export interface ArrangementClip {
+  /** Timeline position in beats */
+  start: number;
+  /** Length on the timeline in beats */
+  length: number;
+  /** Where in the clip's loop playback begins, in beats (set when the left part is cut off) */
+  offset?: number;
+  clip: Clip;
+}
+
+export interface LoopRegion {
+  enabled: boolean;
+  /** Beats, on the bar grid */
+  start: number;
+  end: number;
 }
 
 export interface Project {
@@ -94,6 +114,7 @@ export interface Project {
   masterVolume: number;
   key: KeySignature;
   tuning: TuningSettings;
+  loop: LoopRegion;
   tracks: Track[];
 }
 
@@ -132,6 +153,7 @@ export function createTrack(index: number, instrument: InstrumentKind, sceneCoun
     solo: false,
     fx: { delay: 0, drive: { ...DEFAULT_DRIVE } },
     clips: Array.from({ length: sceneCount }, () => null),
+    arrangement: [],
   };
 }
 
@@ -194,6 +216,7 @@ export function createDemoProject(): Project {
     masterVolume: 0.8,
     key: { root: 0, scale: "minor" },
     tuning: { system: "12-tet" },
+    loop: { enabled: false, start: 0, end: 4 * BEATS_PER_BAR },
     tracks: [drums, bass, lead, extra],
   };
 }
@@ -212,27 +235,23 @@ export function parseProject(json: string): Project {
   const sceneCount = typeof data.sceneCount === "number" ? data.sceneCount : 8;
   const tracks = data.tracks.map((t, i) => {
     const base = createTrack(i, t.instrument === "drums" ? "drums" : "synth", sceneCount);
-    const clips = Array.from({ length: sceneCount }, (_, s) => {
-      const c = t.clips?.[s];
-      if (!c) return null;
-      return {
-        name: String(c.name ?? "Clip"),
-        length: Math.max(0.25, Number(c.length) || BEATS_PER_BAR),
-        notes: (c.notes ?? []).map((n) => ({
-          pitch: clampInt(n.pitch, 0, 127),
-          start: Math.max(0, Number(n.start) || 0),
-          length: Math.max(1 / 64, Number(n.length) || 0.25),
-          velocity: clamp01(n.velocity ?? 0.8),
-          probability: clamp01(n.probability ?? 1),
-        })),
-      };
-    });
+    const clips = Array.from({ length: sceneCount }, (_, s) => (t.clips?.[s] ? parseClip(t.clips[s]) : null));
+    const arrangement = (Array.isArray(t.arrangement) ? t.arrangement : [])
+      .filter((a) => a && a.clip)
+      .map((a) => ({
+        start: Math.max(0, Number(a.start) || 0),
+        length: Math.max(0.25, Number(a.length) || BEATS_PER_BAR),
+        offset: Math.max(0, Number(a.offset) || 0),
+        clip: parseClip(a.clip),
+      }))
+      .sort((a, b) => a.start - b.start);
     return {
       ...base,
       ...t,
       synth: { ...base.synth, ...t.synth },
       fx: { ...base.fx, ...t.fx, drive: { ...base.fx.drive, ...t.fx?.drive } },
       clips,
+      arrangement,
     };
   });
   return {
@@ -246,8 +265,40 @@ export function parseProject(json: string): Project {
       scale: typeof data.key?.scale === "string" ? data.key.scale : "major",
     },
     tuning: { system: typeof data.tuning?.system === "string" ? data.tuning.system : "12-tet" },
+    loop: parseLoop(data.loop),
     tracks,
   };
+}
+
+function parseLoop(l: Partial<LoopRegion> | undefined): LoopRegion {
+  const start = Math.max(0, Math.round((Number(l?.start) || 0) / BEATS_PER_BAR) * BEATS_PER_BAR);
+  const end = Math.round((Number(l?.end) || start + 4 * BEATS_PER_BAR) / BEATS_PER_BAR) * BEATS_PER_BAR;
+  return { enabled: !!l?.enabled, start, end: Math.max(start + BEATS_PER_BAR, end) };
+}
+
+function parseClip(c: Partial<Clip>): Clip {
+  return {
+    name: String(c.name ?? "Clip"),
+    length: Math.max(0.25, Number(c.length) || BEATS_PER_BAR),
+    notes: (c.notes ?? []).map((n) => ({
+      pitch: clampInt(n.pitch, 0, 127),
+      start: Math.max(0, Number(n.start) || 0),
+      length: Math.max(1 / 64, Number(n.length) || 0.25),
+      velocity: clamp01(n.velocity ?? 0.8),
+      probability: clamp01(n.probability ?? 1),
+    })),
+  };
+}
+
+export function cloneClip(c: Clip): Clip {
+  return { name: c.name, length: c.length, notes: c.notes.map((n) => ({ ...n })) };
+}
+
+/** End of the last arrangement clip in beats (0 when the arrangement is empty). */
+export function arrangementEnd(project: Project): number {
+  let end = 0;
+  for (const t of project.tracks) for (const a of t.arrangement) end = Math.max(end, a.start + a.length);
+  return end;
 }
 
 function clamp01(v: unknown): number {
@@ -264,4 +315,30 @@ function clampInt(v: unknown, min: number, max: number): number {
 export const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 export function pitchName(pitch: number): string {
   return `${NOTE_NAMES[pitch % 12]}${Math.floor(pitch / 12) - 2}`;
+}
+
+/**
+ * Makes room for `placed`: other clips it covers are removed, clips it
+ * partly overlaps are shortened (the clip that starts later wins).
+ */
+export function trimOverlaps(list: ArrangementClip[], placed: ArrangementClip) {
+  const pEnd = placed.start + placed.length;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const o = list[i];
+    if (o === placed) continue;
+    const oEnd = o.start + o.length;
+    if (oEnd <= placed.start || o.start >= pEnd) continue;
+    if (o.start >= placed.start && oEnd <= pEnd) {
+      list.splice(i, 1);
+    } else if (o.start < placed.start) {
+      // Starts before: cut its tail. If it also extends past the end, keep the remainder as a new piece.
+      if (oEnd > pEnd) list.push({ start: pEnd, length: oEnd - pEnd, clip: cloneClip(o.clip), offset: (o.offset ?? 0) + (pEnd - o.start) });
+      o.length = placed.start - o.start;
+    } else {
+      // Starts inside, ends after: move its start behind the placed clip.
+      o.offset = (o.offset ?? 0) + (pEnd - o.start);
+      o.length = oEnd - pEnd;
+      o.start = pEnd;
+    }
+  }
 }

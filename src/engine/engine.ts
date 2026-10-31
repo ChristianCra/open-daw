@@ -6,7 +6,16 @@ import { BEATS_PER_BAR, type Project } from "../model";
 import { getTuning } from "../music/tuning";
 import { DriveUnit } from "./drive";
 import { DrumKit, PolySynth, type Instrument, type Voice } from "./instruments";
-import { advanceTrack, emptyPlayState, quantize, type ScheduledNote, type TrackPlayState } from "./scheduler";
+import {
+  advanceTrack,
+  arrangementNotesInWindow,
+  emptyPlayState,
+  linearToTimeline,
+  quantize,
+  timelineSegments,
+  type ScheduledNote,
+  type TrackPlayState,
+} from "./scheduler";
 
 const LOOKAHEAD_SECONDS = 0.12;
 const TICK_MS = 25;
@@ -37,6 +46,12 @@ export class AudioEngine {
   /** Transport beat up to which notes have been scheduled */
   private scheduledUntil = 0;
   playStates: TrackPlayState[] = [];
+  /** Per track: true = plays the arrangement, false = overridden by the session grid */
+  followArrangement: boolean[] = [];
+  /** Timeline beat (on the bar grid) where playback starts */
+  playStart = 0;
+  /** Called when a track switches session clip (scene) or stops; `linearBeat` is when it happens. */
+  onSessionSwitch: ((track: number, scene: number | null, linearBeat: number) => void) | null = null;
 
   constructor(public project: Project) {
     this.ctx = new AudioContext({ latencyHint: "interactive" });
@@ -73,6 +88,7 @@ export class AudioEngine {
     this.project = project;
     this.channels = project.tracks.map((_, i) => this.createChannel(i));
     this.playStates = project.tracks.map(() => emptyPlayState());
+    this.followArrangement = project.tracks.map(() => true);
     this.syncMixer();
   }
 
@@ -81,6 +97,7 @@ export class AudioEngine {
     const i = this.channels.length;
     this.channels.push(this.createChannel(i));
     this.playStates.push(emptyPlayState());
+    this.followArrangement.push(true);
     this.syncMixer();
   }
 
@@ -148,6 +165,41 @@ export class AudioEngine {
     return this.anchorBeat + (this.ctx.currentTime - this.anchorTime) / this.secondsPerBeat;
   }
 
+  /** Current position on the arrangement timeline (loop applied). */
+  get timelineBeat(): number {
+    if (!this.playing) return this.playStart;
+    return linearToTimeline(Math.max(0, this.currentBeat), this.playStart, this.project.loop);
+  }
+
+  /** Converts a linear transport beat to a timeline beat. */
+  toTimeline(linearBeat: number): number {
+    return linearToTimeline(linearBeat, this.playStart, this.project.loop);
+  }
+
+  /** Moves the start position (snapped to bars). Restarts playback there if running. */
+  setPlayStart(beat: number) {
+    this.playStart = Math.max(0, Math.round(beat / BEATS_PER_BAR) * BEATS_PER_BAR);
+    if (this.playing) {
+      this.stop();
+      void this.play();
+    }
+  }
+
+  /** True when at least one track is overridden by a session clip. */
+  get sessionOverride(): boolean {
+    return this.followArrangement.some((f) => !f);
+  }
+
+  /** Stops session clips and lets every track play the arrangement again. */
+  backToArrangement() {
+    this.playStates.forEach((st, i) => {
+      if (st.playing || st.queued) this.onSessionSwitch?.(i, null, Math.max(this.scheduledUntil, 0));
+      st.playing = null;
+      st.queued = null;
+    });
+    this.followArrangement = this.followArrangement.map(() => true);
+  }
+
   private beatToTime(beat: number) {
     return this.anchorTime + (beat - this.anchorBeat) * this.secondsPerBeat;
   }
@@ -168,6 +220,7 @@ export class AudioEngine {
     this.anchorBeat = 0;
     this.anchorTime = this.ctx.currentTime + 0.05;
     this.scheduledUntil = 0;
+    this.playStart = Math.max(0, Math.round(this.playStart / BEATS_PER_BAR) * BEATS_PER_BAR);
     // Anything queued while stopped starts right at the downbeat.
     for (const st of this.playStates) if (st.queued) st.queued.atBeat = 0;
     this.timer = window.setInterval(() => this.tick(), TICK_MS);
@@ -191,12 +244,14 @@ export class AudioEngine {
   }
 
   launchClip(track: number, scene: number) {
+    this.followArrangement[track] = false;
     this.playStates[track].queued = { scene, atBeat: this.nextLaunchBeat() };
     if (!this.playing) void this.play();
   }
 
   stopTrack(track: number) {
     const st = this.playStates[track];
+    this.followArrangement[track] = false;
     if (!this.playing) {
       st.playing = null;
       st.queued = null;
@@ -208,6 +263,7 @@ export class AudioEngine {
   launchScene(scene: number) {
     const at = this.nextLaunchBeat();
     this.project.tracks.forEach((tr, i) => {
+      this.followArrangement[i] = false;
       this.playStates[i].queued = { scene: tr.clips[scene] ? scene : null, atBeat: at };
     });
     if (!this.playing) void this.play();
@@ -259,7 +315,29 @@ export class AudioEngine {
     if (horizon <= this.scheduledUntil) return;
     const from = this.scheduledUntil;
     const notes: ScheduledNote[] = [];
-    this.project.tracks.forEach((tr, i) => advanceTrack(i, tr.clips, this.playStates[i], from, horizon, notes));
+    this.project.tracks.forEach((tr, i) => {
+      const st = this.playStates[i];
+      if (this.followArrangement[i] && !st.playing && !st.queued) return;
+      const queued = st.queued;
+      const before = st.playing?.scene ?? null;
+      advanceTrack(i, tr.clips, st, from, horizon, notes);
+      if (queued && queued.atBeat < horizon) {
+        const after = st.playing?.scene ?? null;
+        if (after !== before || after !== null) this.onSessionSwitch?.(i, after, Math.max(queued.atBeat, from));
+      }
+    });
+    // Arrangement playback, split where the loop region wraps around.
+    for (const seg of timelineSegments(from, horizon, this.playStart, this.project.loop)) {
+      const tlTo = seg.tlFrom + (seg.linTo - seg.linFrom);
+      this.project.tracks.forEach((tr, i) => {
+        if (!this.followArrangement[i] || this.playStates[i].playing) return;
+        for (const n of arrangementNotesInWindow(i, tr.arrangement, seg.tlFrom, tlTo)) {
+          const linBeat = seg.linFrom + (n.beat - seg.tlFrom);
+          const length = seg.wraps ? Math.min(n.length, seg.linTo - linBeat) : n.length;
+          notes.push({ ...n, beat: linBeat, length });
+        }
+      });
+    }
     for (const n of notes) {
       // Per-note probability is rolled each time the note comes around.
       if (Math.random() >= (n.note.probability ?? 1)) continue;

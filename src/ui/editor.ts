@@ -51,13 +51,22 @@ export class ClipEditor {
     const clip = app.selectedClip;
     const track = app.selectedTrack;
     const oldScroller = host.querySelector<HTMLElement>(".roll-scroll");
-    const clipKey = `${app.selection.track}:${app.selection.scene}:${track?.instrument}:${this.fold}`;
+    const clipKey = `${app.selection.track}:${app.selection.scene}:${app.selection.arr}:${track?.instrument}:${this.fold}`;
     if (oldScroller && clipKey === this.lastClipKey) this.scrollTop = oldScroller.scrollTop;
     else this.scrollTop = null;
     this.lastClipKey = clipKey;
 
     if (!track) {
       host.replaceChildren();
+      return;
+    }
+    if (!clip && app.view === "arrangement") {
+      host.replaceChildren(
+        h("div", { class: "panel-title" }, track.name),
+        h("div", { class: "empty-editor" }, h("p", {}, "Wähle einen Clip in der Zeitleiste aus, um ihn hier zu bearbeiten.")),
+      );
+      this.notesLayer = null;
+      this.playhead = null;
       return;
     }
     if (!clip) {
@@ -189,18 +198,15 @@ export class ClipEditor {
     this.notesLayer.replaceChildren(...children);
   }
 
-  updatePlayhead(beat: number) {
-    const app = this.app;
-    const clip = app.selectedClip;
-    if (!this.playhead || !clip) return;
-    const st = app.engine.playStates[app.selection.track];
-    if (!app.engine.playing || !st?.playing || st.playing.scene !== app.selection.scene || beat < st.playing.startBeat) {
+  updatePlayhead() {
+    if (!this.playhead || !this.app.selectedClip) return;
+    const at = this.app.selectedClipPosition();
+    if (!at) {
       this.playhead.style.display = "none";
       return;
     }
-    const pos = (beat - st.playing.startBeat) % clip.length;
     this.playhead.style.display = "block";
-    this.playhead.style.transform = `translateX(${pos * STEPS_PER_BEAT * STEP_W}px)`;
+    this.playhead.style.transform = `translateX(${at.pos * STEPS_PER_BEAT * STEP_W}px)`;
   }
 
   private attachPointer(canvas: HTMLElement) {

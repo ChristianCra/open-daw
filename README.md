@@ -10,6 +10,8 @@ kein UI-Design anderer DAWs. Mehr dazu in [docs/REVERSE-ENGINEERING.md](docs/REV
 ## Was schon geht
 
 - **Clip-Raster** mit Szenen, Start quantisiert auf den nächsten Takt, Stop pro Spur
+- **Arrangement-Zeitleiste**: Clips aus dem Raster hineinziehen, verschieben, kürzen, duplizieren,
+  Loop-Bereich, Session-Jams direkt ins Arrangement aufnehmen
 - **Piano-Roll** mit Tonart-/Skalen-Hervorhebung, „Fold“, Velocity und Wahrscheinlichkeit pro Note
 - **MIDI Tools**: Generatoren (Melodie, Akkorde, euklidische Rhythmen) und Transformationen
   (Arpeggio, Strum, Verzierungen, Rhythmus-Variation, Accelerando/Ritardando, Quantize, Humanize, …)
@@ -65,6 +67,11 @@ Installer und hängt sie an einen Release-Entwurf.
 | Aktion | So geht's |
 | --- | --- |
 | Play/Stop | Leertaste |
+| Session/Arrangement wechseln | Tab |
+| Startposition / Loop setzen | Im Arrangement-Lineal klicken / ziehen |
+| Clip in die Zeitleiste | Aus dem Raster ziehen oder Doppelklick in eine Spur |
+| Clip verschieben / Länge ändern | Ziehen / rechten Rand ziehen (Alt: feineres Raster) |
+| Clip duplizieren / löschen | Strg+D / Entf |
 | Clip anlegen | Doppelklick auf leeren Slot |
 | Clip starten | ▶ im Clip oder ▶ Szene |
 | Note zeichnen | Klicken und nach rechts ziehen |
