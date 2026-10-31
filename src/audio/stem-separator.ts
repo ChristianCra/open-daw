@@ -1,7 +1,7 @@
 // Main-thread side of stem separation: downloads and caches the model,
 // resamples audio to 44.1 kHz stereo and talks to the worker.
 
-import type { WorkerRequest, WorkerResponse } from "./stems.worker";
+import type { Backend, WorkerRequest, WorkerResponse } from "./stems.worker";
 import { STEM_NAMES, STEM_SAMPLE_RATE, type StemName } from "./stems";
 
 /** HT-Demucs v4 (Meta, MIT license), exported to ONNX with fp16 weights (~166 MB). */
@@ -57,6 +57,7 @@ export async function loadModel(onProgress: (p: SeparationProgress) => void, sig
     received += value.length;
     onProgress({ stage: "download", fraction: total ? received / total : -1, detail: `Modell laden: ${mb(received)}${total ? ` von ${mb(total)}` : ""}` });
   }
+  if (total && received !== total) throw new Error(`Modell-Download unvollständig (${mb(received)} von ${mb(total)})`);
   const data = new Uint8Array(received);
   let o = 0;
   for (const p of parts) {
@@ -85,11 +86,46 @@ export async function toModelFormat(buf: AudioBuffer): Promise<[Float32Array, Fl
   return [out.getChannelData(0).slice(), out.getChannelData(1).slice()];
 }
 
-/** Owns the worker; the loaded model stays in it for further separations. */
+const BACKEND_LABEL: Record<Backend, string> = { webgpu: "WebGPU", wasm: "WebAssembly" };
+const GPU_BROKEN_KEY = "open-daw.stems.webgpu-broken";
+
+function gpuBroken(): boolean {
+  try {
+    return localStorage.getItem(GPU_BROKEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markGpuBroken() {
+  try {
+    localStorage.setItem(GPU_BROKEN_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Error with the details of every backend that was tried. */
+export class SeparationError extends Error {
+  constructor(
+    message: string,
+    readonly details: string[],
+  ) {
+    super(message);
+    this.name = "SeparationError";
+  }
+}
+
+/**
+ * Owns the worker; the loaded model stays in it for further separations.
+ * WebGPU is tried first. If it fails while starting or while separating, a
+ * fresh worker retries with WebAssembly, and WebGPU is skipped from then on.
+ */
 export class StemSeparator {
   private worker: Worker | null = null;
   private ready: Promise<string> | null = null;
   backend = "";
+  private current: Backend | null = null;
 
   /** Source of the model: the default URL, or a file the user picked. */
   modelSource: string | File = MODEL_URL;
@@ -105,6 +141,7 @@ export class StemSeparator {
         this.dispose();
         reject(new DOMException("Abgebrochen", "AbortError"));
       };
+      if (signal?.aborted) return abort();
       signal?.addEventListener("abort", abort, { once: true });
       worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
         const m = e.data;
@@ -117,40 +154,85 @@ export class StemSeparator {
         else resolve(m);
       };
       worker.onerror = (e) => {
+        e.preventDefault();
         signal?.removeEventListener("abort", abort);
-        reject(new Error(e.message || "Fehler im Worker"));
+        reject(new Error(e.message || "Der Worker ist abgestürzt (evtl. zu wenig Arbeitsspeicher)"));
       };
       worker.postMessage(msg, transfer);
     });
   }
 
+  private async loadBytes(onProgress: (p: SeparationProgress) => void, signal?: AbortSignal): Promise<ArrayBuffer> {
+    return typeof this.modelSource === "string" ? await loadModel(onProgress, signal, this.modelSource) : await this.modelSource.arrayBuffer();
+  }
+
   private async init(onProgress: (p: SeparationProgress) => void, signal?: AbortSignal): Promise<string> {
-    const model = typeof this.modelSource === "string" ? await loadModel(onProgress, signal, this.modelSource) : await this.modelSource.arrayBuffer();
-    onProgress({ stage: "init", fraction: -1, detail: "Modell starten …" });
-    this.worker = this.spawn();
-    const res = await this.request({ type: "init", model, useGpu: true }, [model], undefined, signal);
-    if (res.type !== "ready") throw new Error("Unerwartete Antwort");
-    this.backend = res.backend;
-    return res.backend;
+    const backends: Backend[] = gpuBroken() ? ["wasm"] : ["webgpu", "wasm"];
+    const errors: string[] = [];
+    for (const backend of backends) {
+      // The model buffer is handed over to the worker, so load it per attempt (a cache hit after the first).
+      const model = await this.loadBytes(onProgress, signal);
+      onProgress({ stage: "init", fraction: -1, detail: `Modell starten (${BACKEND_LABEL[backend]}) …` });
+      this.worker = this.spawn();
+      try {
+        const res = await this.request({ type: "init", model, backend }, [model], undefined, signal);
+        if (res.type !== "ready") throw new Error("Unerwartete Antwort");
+        this.backend = res.backend;
+        this.current = backend;
+        return res.backend;
+      } catch (err) {
+        if ((err as Error).name === "AbortError") throw err;
+        console.warn(`[stems] ${BACKEND_LABEL[backend]} konnte nicht starten:`, err);
+        const message = (err as Error).message;
+        errors.push(`${BACKEND_LABEL[backend]} (Start): ${message}`);
+        if (backend === "webgpu" && !message.startsWith("Keine WebGPU")) markGpuBroken();
+        this.worker?.terminate();
+        this.worker = null;
+      }
+    }
+    // A broken download would fail again forever, so fetch it fresh next time.
+    if (typeof this.modelSource === "string") await clearModelCache();
+    throw new SeparationError("Das Modell konnte nicht gestartet werden.", errors);
   }
 
   /** Separates a buffer into drums, bass, other and vocals (44.1 kHz stereo). */
   async separate(buf: AudioBuffer, onProgress: (p: SeparationProgress) => void, signal?: AbortSignal): Promise<Stem[]> {
-    if (!this.ready) {
-      this.ready = this.init(onProgress, signal);
-      this.ready.catch(() => this.dispose());
-    }
-    await this.ready;
     const [left, right] = await toModelFormat(buf);
-    onProgress({ stage: "separate", fraction: 0, detail: "Trennen …" });
-    const res = await this.request({ type: "run", left, right }, [left.buffer, right.buffer], onProgress, signal);
-    if (res.type !== "result") throw new Error("Unerwartete Antwort");
-    return res.stems.map((channels, i) => ({ name: STEM_NAMES[i], channels }));
+    const errors: string[] = [];
+    for (;;) {
+      if (!this.ready) {
+        this.ready = this.init(onProgress, signal);
+        this.ready.catch(() => this.dispose());
+      }
+      try {
+        await this.ready;
+      } catch (err) {
+        if (err instanceof SeparationError) throw new SeparationError(err.message, [...errors, ...err.details]);
+        throw err;
+      }
+      onProgress({ stage: "separate", fraction: 0, detail: "Trennen …" });
+      try {
+        // Copies (no transfer), so a retry on another backend still has the audio.
+        const res = await this.request({ type: "run", left, right }, [], onProgress, signal);
+        if (res.type !== "result") throw new Error("Unerwartete Antwort");
+        return res.stems.map((channels, i) => ({ name: STEM_NAMES[i], channels }));
+      } catch (err) {
+        if ((err as Error).name === "AbortError") throw err;
+        const backend = this.current;
+        console.warn(`[stems] Trennen mit ${backend} fehlgeschlagen:`, err);
+        errors.push(`${backend ? BACKEND_LABEL[backend] : "?"} (Trennen): ${(err as Error).message}`);
+        this.dispose();
+        if (backend !== "webgpu") throw new SeparationError("Die Trennung ist fehlgeschlagen.", errors);
+        markGpuBroken(); // retry once with WebAssembly
+      }
+    }
   }
 
   dispose() {
     this.worker?.terminate();
     this.worker = null;
     this.ready = null;
+    this.current = null;
+    this.backend = "";
   }
 }
