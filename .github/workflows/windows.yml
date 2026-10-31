@@ -9,9 +9,17 @@ on:
       - ".github/workflows/windows.yml"
       - "package.json"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release-Tag (z. B. v0.1.0). Leer lassen für einen Test-Build ohne Release."
+        required: false
+        default: ""
 
 permissions:
   contents: write
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
 
 jobs:
   build:
@@ -27,15 +35,18 @@ jobs:
         with:
           workspaces: src-tauri -> target
       - run: npm ci
-      # On a version tag: build and attach the installers to a draft release.
-      # Otherwise: just build, the installers are uploaded as a workflow artifact.
+      # On a version tag (pushed, created on the Releases page, or entered when
+      # running the workflow by hand): build and attach the installers to the
+      # release for that tag, creating it if needed. Otherwise just build; the
+      # installers are uploaded as a workflow artifact.
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
-          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && format('open-daw {0}', github.ref_name) || '' }}
-          releaseDraft: true
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: ${{ env.RELEASE_TAG && format('open-daw {0}', env.RELEASE_TAG) || '' }}
+          releaseBody: "Windows-Installer: open-daw_x.y.z_x64-setup.exe (empfohlen) oder die .msi herunterladen und ausführen."
+          releaseDraft: false
       - uses: actions/upload-artifact@v4
         with:
           name: open-daw-windows-installer
