@@ -1180,3 +1180,28 @@ input:not([type]) {
     opacity: 0.35;
   }
 }
+.error-box {
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--danger) 10%, var(--bg2));
+  padding: 8px 10px;
+  margin-top: 8px;
+}
+.error-box[hidden] {
+  display: none;
+}
+.error-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+}
+.error-details {
+  margin: 6px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  max-height: 140px;
+  overflow: auto;
+  user-select: text;
+}

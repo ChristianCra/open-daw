@@ -1,6 +1,6 @@
 [package]
 name = "open-daw"
-version = "0.1.0"
+version = "0.1.1"
 description = "open-daw desktop shell"
 authors = ["open-daw contributors"]
 license = "MIT"
@@ -18,4 +18,4 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.7.4" }
 
 [dependencies]
-tauri = { version = "2.12.5" }
+tauri = { version = "2.12.5", features = ["devtools"] }

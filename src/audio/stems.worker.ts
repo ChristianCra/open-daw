@@ -1,5 +1,7 @@
 // Runs the stem separation model off the main thread with ONNX Runtime Web.
-// WebGPU is used when available, otherwise WebAssembly. WebAssembly runs
+// Each worker runs one backend (WebGPU or WebAssembly). When ONNX Runtime
+// hits a fatal error ("Aborted()") its WebAssembly module is dead for good, so
+// the main thread falls back by starting a fresh worker. WebAssembly runs
 // single-threaded: ORT's thread pool would spawn workers from this bundled
 // worker script, which doesn't work, and static hosting can't enable the
 // cross-origin isolation threads need anyway.
@@ -8,8 +10,10 @@ import * as ort from "onnxruntime-web/webgpu";
 import { chunkInput, OverlapAdd, planChunks, SEGMENT, STEM_NAMES } from "./stems";
 
 export type WorkerRequest =
-  | { type: "init"; model: ArrayBuffer; useGpu: boolean }
+  | { type: "init"; model: ArrayBuffer; backend: Backend }
   | { type: "run"; left: Float32Array; right: Float32Array };
+
+export type Backend = "webgpu" | "wasm";
 
 export type WorkerResponse =
   | { type: "ready"; backend: string }
@@ -20,18 +24,16 @@ export type WorkerResponse =
 let session: ort.InferenceSession | null = null;
 const post = (msg: WorkerResponse, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(msg, transfer);
 
-async function createSession(model: ArrayBuffer, useGpu: boolean): Promise<string> {
+async function createSession(model: ArrayBuffer, backend: Backend): Promise<string> {
   ort.env.wasm.numThreads = 1;
-  const gpu = useGpu && "gpu" in navigator && !!(await (navigator as unknown as { gpu: { requestAdapter(): Promise<unknown> } }).gpu.requestAdapter().catch(() => null));
-  if (gpu) {
-    try {
-      session = await ort.InferenceSession.create(new Uint8Array(model), { executionProviders: ["webgpu"] });
-      return "WebGPU";
-    } catch {
-      /* fall back to WebAssembly */
-    }
+  if (backend === "webgpu") {
+    const gpu = (navigator as unknown as { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
+    const adapter = gpu ? await gpu.requestAdapter().catch(() => null) : null;
+    if (!adapter) throw new Error("Keine WebGPU-Grafikkarte verfügbar");
+    session = await ort.InferenceSession.create(new Uint8Array(model), { executionProviders: ["webgpu"] });
+    return "WebGPU";
   }
-  session = await ort.InferenceSession.create(new Uint8Array(model), { executionProviders: ["wasm"], graphOptimizationLevel: "all" });
+  session = await ort.InferenceSession.create(new Uint8Array(model), { executionProviders: ["wasm"] });
   return "WebAssembly";
 }
 
@@ -57,13 +59,14 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
   try {
     const msg = e.data;
     if (msg.type === "init") {
-      const backend = await createSession(msg.model, msg.useGpu);
+      const backend = await createSession(msg.model, msg.backend);
       post({ type: "ready", backend });
     } else if (msg.type === "run") {
       const stems = await separate(msg.left, msg.right);
       post({ type: "result", stems }, stems.flat().map((c) => c.buffer));
     }
   } catch (err) {
+    console.error("[stems worker]", err);
     post({ type: "error", message: err instanceof Error ? err.message : String(err) });
   }
 };

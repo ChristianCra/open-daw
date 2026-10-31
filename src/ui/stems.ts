@@ -1,7 +1,7 @@
 // Stem separation dialog: splits a sample (or an audio clip) into drums,
 // bass, other and vocals with a local AI model.
 
-import { modelCached, StemSeparator, type SeparationProgress } from "../audio/stem-separator";
+import { modelCached, SeparationError, StemSeparator, type SeparationProgress } from "../audio/stem-separator";
 import { STEM_LABELS, STEM_SAMPLE_RATE } from "../audio/stems";
 import type { SampleMeta } from "../audio/samples";
 import type { App } from "./app";
@@ -30,6 +30,15 @@ export async function openStemDialog(app: App, target: StemTarget) {
   const bar = h("div", { class: "progress-bar" });
   const progress = h("div", { class: "progress", hidden: true }, bar);
   const status = h("p", { class: "hint" });
+  const errorText = h("pre", { class: "error-details" });
+  const copyError = h("button", { class: "btn small", onclick: () => void navigator.clipboard?.writeText(errorText.textContent ?? "").then(() => app.toast("Fehlermeldung kopiert"), () => {}) }, "Kopieren");
+  const errorBox = h(
+    "div",
+    { class: "error-box", hidden: true, role: "alert" },
+    h("div", { class: "error-head" }, h("b", {}, "Die Trennung hat nicht geklappt"), h("span", { class: "spacer" }), copyError),
+    errorText,
+    h("p", { class: "hint" }, "Häufigste Ursache ist zu wenig freier Arbeitsspeicher (das Modell braucht etwa 1,5 GB). Schließ andere Programme und versuch es noch einmal, oder probier ein kürzeres Sample."),
+  );
   const go = h("button", { class: "btn primary" }, "Trennen");
   const pickModel = h("button", { class: "btn", hidden: true, title: "Eine heruntergeladene .onnx-Datei des Modells verwenden" }, "Modell-Datei wählen …");
   const cancel = h("button", { class: "btn" }, "Abbrechen");
@@ -48,6 +57,7 @@ export async function openStemDialog(app: App, target: StemTarget) {
   const run = async () => {
     go.disabled = true;
     pickModel.hidden = true;
+    errorBox.hidden = true;
     controller = new AbortController();
     try {
       const buf = await lib.load(meta.id);
@@ -70,8 +80,14 @@ export async function openStemDialog(app: App, target: StemTarget) {
       }
       overlay.remove();
     } catch (err) {
-      if ((err as Error).name === "AbortError") return;
-      status.textContent = `Fehler: ${(err as Error).message}`;
+      if ((err as Error).name === "AbortError" && controller?.signal.aborted) return;
+      console.error("[stems]", err);
+      const e = err as Error;
+      const lines = [e.message || String(err), ...(err instanceof SeparationError ? err.details : [])];
+      lines.push(`Sample: ${meta.name} (${meta.duration.toFixed(1)} s), ${navigator.userAgent}`);
+      errorText.textContent = lines.join("\n");
+      errorBox.hidden = false;
+      status.textContent = "";
       progress.hidden = true;
       go.disabled = false;
       pickModel.hidden = false;
@@ -116,6 +132,7 @@ export async function openStemDialog(app: App, target: StemTarget) {
         target.clip ? h("p", { class: "hint" }, "Die Stems landen auf vier neuen Spuren unter der aktuellen, die Originalspur wird stummgeschaltet.") : null,
         progress,
         status,
+        errorBox,
       ),
       h("div", { class: "modal-actions" }, pickModel, cancel, go),
     ),
